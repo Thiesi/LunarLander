@@ -1,7 +1,8 @@
-# Release candidate acceptance
+# Release acceptance
 
-Target: `v0.1.0-rc.4`. This is a playable candidate for field testing, not a claim
-that every NetBBS transport or target operating system has been certified.
+Target: `v0.1.0`, the first release, after four candidates. It is not a claim
+that every NetBBS transport or target operating system has been certified; the
+checks still to be done in the field are listed at the end.
 
 ## Completed locally
 
@@ -54,12 +55,14 @@ Linux and Windows with Python 3.11 (Windows is development evidence), pinned to 
 resize down to 70x20 and back to 132x50. Inspect the workflow run associated with
 the release commit; a pending or skipped job is not passing evidence.
 
-## ReLink playtest and remaining field gates
+## Playtests and remaining field checks
 
 ReLink reported a successful general playtest and enjoyable gameplay, with
-deployment feedback in #14. That feedback is addressed in this candidate.
-This report does not identify every transport, mission or recovery scenario;
-the expanded mission set and presentation still need human flight assessment.
+deployment feedback in #14, addressed in rc.2. The rc.3 playtest's findings were
+fixed in rc.4, and the rc.4 review's one cosmetic finding (the menu's ranking
+note wrapping mid-phrase) is fixed in v0.1.0. These reports do not identify
+every transport, mission or recovery scenario; the following were not performed
+before release and remain open:
 
 - Human flight/control/balance assessment of the four added authored missions and animations.
 - rc.4 career: human assessment of the eight new missions and of the medal
@@ -76,5 +79,5 @@ the expanded mission set and presentation still need human flight assessment.
 
 Automated successful flight is evidence of feasibility, not evidence of enjoyable
 difficulty. NetBBS's terminal emulator is useful for screen assertions, but it does
-not substitute for a human looking at a real client. Keep these gates open until
-the corresponding evidence exists; a candidate can be distributed meanwhile.
+not substitute for a human looking at a real client. Report what these checks
+find as issues against the release.

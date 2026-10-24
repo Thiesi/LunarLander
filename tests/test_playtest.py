@@ -160,14 +160,17 @@ class PlaytestFindingTests(unittest.TestCase):
 
     def test_ranking_notes_are_never_cut_by_the_card_rule(self):
         for note in ("RANKED FLIGHT / best landing per pilot",
-                     "PRACTICE ONLY / no persistent NetBBS caller identity",
+                     "PRACTICE ONLY / no persistent caller identity",
                      "PRACTICE ONLY / pilot records unavailable"):
             with self.subTest(note=note):
                 canvas = ll.Display(ll.Host()).draw(ll.training(), "menu", mission=ll.missions()[1],
                                                     record_note=note)
-                text = " ".join(self.rows(canvas))
-                for line in ll.textwrap.wrap(note, 36):
-                    self.assertIn(line, text)
+                rows = self.rows(canvas)
+                # The label heads its own row; the detail sits whole on the next.
+                label, detail = note.split(" / ")
+                below = next(n for n, row in enumerate(rows) if detail in row)
+                column = rows[below].index(detail)
+                self.assertEqual(rows[below - 1][column:column + len(label) + 1], label + " ")
 
     def test_q_returns_at_once_except_mid_flight(self):
         for mode in ("menu", "debrief", "scores", "splash"):
