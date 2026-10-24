@@ -81,7 +81,8 @@ Reviewed public NetBBS `main` on 2026-10-24:
   `DOOR_*` environment names are allowed; arbitrary `LL_*` names are not.
 - [Runtime](https://github.com/Thiesi/NetBBS/blob/main/src/netbbs/doors/runtime.py)
   publishes JSON and signals stdio resize with SIGUSR1 on POSIX. Polling metadata
-  periodically also supports Windows and handles coalesced notifications.
+  periodically handles coalesced notifications. The current Windows host does not
+  republish native resize metadata; callers there select size before launch.
 - [Retro Trivia](https://github.com/Thiesi/NetBBS/blob/main/src/netbbs/doors/bundled/retro_trivia.py)
   demonstrates timed POSIX/Windows input. LL implements its own bounded input
   decoder and stream lifecycle rather than importing the bundled game.
