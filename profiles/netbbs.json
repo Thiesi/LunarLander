@@ -1,0 +1,19 @@
+{
+  "name": "Lunar Lander",
+  "executable_path": "/usr/local/bin/python3",
+  "args": ["{install_dir}/lunar_lander.py"],
+  "profile": {
+    "version": 1,
+    "adapter": "native",
+    "endpoint": "stdio",
+    "install_dir": "/var/games/netbbs/lunar-lander",
+    "encoding": "utf-8",
+    "width": 0,
+    "height": 0,
+    "resize_signal": true,
+    "time_limit": 1800,
+    "cpu_seconds": 300,
+    "max_sessions": 1,
+    "environment": {"DOOR_LL_DATA_DIR": "/var/games/netbbs/lunar-lander/data"}
+  }
+}
