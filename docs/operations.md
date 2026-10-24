@@ -9,7 +9,7 @@ python lunar_lander.py
 ```
 
 No packages are required. Local play has no NetBBS account and is unranked.
-Choose a mission with 1–5, then Enter. A/D or left/right tilt; W/S or up/down
+Choose a mission with 1–9, then Enter. A/D or left/right tilt; W/S or up/down
 adjust throttle. The setting stays put when you release the key. Digits select
 power from 0 (off) to 9 (full); Space cuts thrust and X levels the craft.
 P pauses; ? opens the manual; Q returns to the BBS.
@@ -21,8 +21,13 @@ The displayed craft is an enlarged navigation symbol; numeric altitude and the
 pad lights are the precise references. The camera scale changes near the surface.
 
 Tranquility, Ridge Run and The Needle increase drift and landing difficulty.
-The daily challenge is selected by UTC date when the door starts; the mission and
-date remain fixed for that session. Only completed safe landings rank. Training,
+Copernicus, Hadley Rille, Far Side and Polar Approach add longer crossings,
+opposing drift and tighter fuel margins. All nine choices are available immediately.
+The daily challenge changes at midnight in the node's published IANA timezone,
+including daylight-saving transitions. Everyone gets the same flight for a given
+calendar date; terrain and starting conditions change between dates. An active
+flight keeps its original date and leaderboard, even past midnight. Returning to
+the briefing or retrying picks up the new day. Only completed safe landings rank. Training,
 aborted flights and crashes never replace a record. The formula is in the manual:
 difficulty times base landing points, fuel reserve and landing precision. One best
 score per pilot per mission; equal scores keep the earlier achieved result.
@@ -42,9 +47,11 @@ score per pilot per mission; equal scores keep the earlier achieved result.
    chosen data directory. Keep the entry SysOp-only until Test as SysOp and real
    caller transport checks pass. Do not enable outbound posting; LL does not use it.
 5. Keep UTF-8 encoding and native stdio. The profile follows caller size (0x0),
-   opts into resize signals, and starts with one caller allowed. LL supports
-   transactional simultaneous callers; raise `max_sessions` and set
-   `multinode_certified: true` only after your two-caller check.
+   opts into resize signals, and allows eight simultaneous callers with
+   `max_sessions: 8` and `multinode_certified: true`. Existing installations must
+   update these two profile settings themselves; replacing the script does not
+   update a registered door. Callers fly independently and compete on shared
+   leaderboards; this is not a shared spacecraft or a head-to-head flight.
 
 NetBBS supplies the path in `NETBBS_DOOR_INFO`; never place that file beside the
 game manually in a real installation. LL accepts API versions 2–5 and ignores
@@ -58,6 +65,29 @@ the same account identity. LL cannot infer guest privileges from the public API.
 16/256/truecolor palette and Unicode preference. ASCII glyph mode still requires
 ANSI cursor addressing. Plain non-ANSI terminals and classic DOS/DOOR32 launching
 are not supported in this release.
+
+The intro, ignition, successful landing and crash scenes are brief and skippable
+with Space (or any other key except Q, which quits). The skip key is consumed;
+press the next action separately. The simulation is stopped during a scene, and
+records are saved before the landing animation. To omit the opening animation,
+set `DOOR_LL_SPLASH=0` in the profile environment. `DOOR_LL_SCENES=0` disables the
+launch and outcome scenes. These settings are independent.
+
+### Daily calendar and date display
+
+LL reads `timezone` from the native door metadata. A missing timezone uses UTC;
+an invalid zone or unavailable system timezone database produces a visible warning
+and a bounded stderr diagnostic before falling back to UTC. Install the operating
+system's timezone data to use named zones. The briefing shows the reset timezone.
+
+NetBBS's current door API does not publish the node's date-format preference.
+Set `DOOR_LL_DATE_FORMAT` in the profile environment to match it, for example
+`%d.%m.%Y`, `%d/%m/%Y` or `%m/%d/%Y`; the default is `%Y-%m-%d`.
+Allowed directives are `%Y`, `%y`, `%m`, `%d`, `%b`, `%B`, `%a`, `%A`, with spaces,
+dots, slashes, commas and hyphens (maximum 32 characters). Month/day names follow
+the process locale. Invalid formats visibly fall back to ISO dates. Date formatting
+never changes the challenge seed or stored record keys. The missing API field is
+tracked in [NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545).
 
 NetBBS forwards size changes via republished JSON and SIGUSR1. LL also
 polls metadata to coalesce notifications.
@@ -128,5 +158,8 @@ not a production NetBBS deployment target. It does not test a real client.
 `scripts/capture.py --output .task/flight.png` exports the game's actual ANSI frame
 and a PNG preview (Pillow is a development-only dependency). `--width 132 --height 50`,
 `--color 16`, `--ascii` and `--mode menu` select other views.
+Use `--mode splash --gif --output .task/splash.gif` to export an animation;
+`launch`, `landing` and `crash` are also available. `--angle 40` previews a tilted craft.
+Windows developers need `tzdata` installed to run the timezone tests.
 
 See [acceptance evidence](acceptance.md) for completed checks and field limits.

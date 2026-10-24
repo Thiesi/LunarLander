@@ -41,11 +41,11 @@ class MissionTests(unittest.TestCase):
                 self.assertGreaterEqual(mission.width, 45)
 
     def test_daily_reproducible_across_processes(self):
-        code = "import lunar_lander as l; print(repr(l.missions('2026-10-24')[-1].launch()))"
+        code = "import lunar_lander as l; print(repr(l.missions('2026-10-24')[4].launch()))"
         first = subprocess.check_output([sys.executable, "-c", code])
         second = subprocess.check_output([sys.executable, "-c", code])
         self.assertEqual(first, second)
-        self.assertNotEqual(ll.missions("2026-10-24")[-1], ll.missions("2026-10-25")[-1])
+        self.assertNotEqual(ll.missions("2026-10-24")[4], ll.missions("2026-10-25")[4])
 
 
 class RecordTests(unittest.TestCase):

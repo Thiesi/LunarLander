@@ -43,9 +43,9 @@ No emoji, font-dependent icons, blinking text or color-only warnings.
   bounded tracking and a scale label. Instruments remain fixed. Pause physics on
   undersize terminals, help and explicit pause; deadline still advances. Never
   write the bottom-right cell. Resize invalidates the diff buffer.
-- **Content:** training basin plus three authored challenges, increasing lateral
+- **Content:** training basin plus seven authored challenges, increasing lateral
   drift, terrain and fuel pressure. A seeded daily challenge gives callers the
-  same start for a UTC day. No randomness in collision or scoring.
+  same start for a node-local calendar day. No randomness in collision or scoring.
 - **Scoring:** completed safe landings only; difficulty, fuel reserve and landing
   precision. Training is unranked. One best score per node/account/challenge;
   exact score formula and tie-break appear in help. No resume of an active flight
@@ -185,6 +185,30 @@ field/balance gates. Stable v1 requires actual terminal/browser human acceptance
 without it publish an explicitly marked prerelease. Blockers: S07.
 
 ## Delivery discipline
+
+### P5 — ReLink playtest polish
+
+[Milestone 6](https://github.com/Thiesi/LunarLander/milestone/6) and
+[tracker #15](https://github.com/Thiesi/LunarLander/issues/15) define R01–R03,
+their acceptance criteria and blockers. R01 corrects deployment guidance and
+enables eight independent concurrent callers. R02 adds skippable arrival,
+ignition, landing and crash scenes, consistent hotkey/value colors, and the
+user-selected rotating half-block hull. R03 adds four authored missions and
+node-local daily rollover with an explicit date-format setting.
+
+The original S05 UTC policy above describes rc.1; R03 supersedes it. In-flight
+attempts retain their calendar key through midnight, while briefing/retry picks
+up the new day. Existing mission IDs and record schema remain unchanged.
+NetBBS publishes the node timezone but not its date-format preference; use
+`DOOR_LL_DATE_FORMAT` rather than require an API change. The nonblocking gap is
+tracked in [NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545).
+
+Animations run at the existing 10 fps, obey host deadlines and consume their skip
+key. They never advance flight physics. Save a landing before celebrating it;
+unranked play and storage errors remain explicit. The eight-caller shipped
+profile is checked through NetBBS itself as well as transactional record tests.
+
+### Review and delivery
 
 Fetch and start from current remote main. Commit/push and open a PR; wait for Claude's
 completed written review. Triage findings by caller/SysOp impact, fix meaningful
