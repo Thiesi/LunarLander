@@ -1,18 +1,29 @@
 # Release candidate acceptance
 
-Target: `v0.1.0-rc.3`. This is a playable candidate for field testing, not a claim
+Target: `v0.1.0-rc.4`. This is a playable candidate for field testing, not a claim
 that every NetBBS transport or target operating system has been certified.
 
 ## Completed locally
 
-- 47 unittest cases, Windows / Python 3.14.7 with development-only tzdata: flight model,
+- 70 unittest cases, Windows / Python 3.14.7 with development-only tzdata: flight model,
   discrete-control successful landings in all missions, daily reproducibility,
   real process quit/EOF/deadline, incremental keys, palettes, screen bounds,
   help/pause/retry, database concurrency/isolation/recovery refusal; node-local
   midnight and DST, active-flight date pinning, formatting-independent seeds,
   scene lifecycle/skip/save ordering, rotating hull and colored controls/values;
   splash hold and spent skip key, menu grid alignment, named unsafe-speed
-  warnings, stars kept off scenery and 256/16-color readings of scenery colors.
+  warnings, stars kept off scenery and 256/16-color readings of scenery colors;
+  rc.4: the menu's ranking notes in full, Q's return and in-flight confirmation,
+  the advertised cursor keys, the CPU-budget estimate and clean exit, medal
+  thresholds, the rank ladder and the daily challenge's exclusion, chapter
+  navigation, the award sequence after a landing, and NetBBS game-event requests.
+- rc.4 idle CPU: the 132x50 menu measured 2.5% of a CPU, down from about 20% in
+  rc.3, whose idle callers ran out the 300 CPU-second ceiling in about 25 minutes.
+- rc.4 playtest fixes: NetBBS 7.40.0 from the pinned commit, Windows / Python
+  3.14.7: all six scenarios passed. With the career feature added, the five
+  untimed scenarios passed locally; the 3-second deadline scenario timed out
+  under unrelated 100% CPU load (as did the fixes alone at that time) and passed
+  in hosted CI on both platforms.
 - rc.3 visual overhaul: NetBBS 7.40.0 from an archive of pinned commit
   `8e593794ab5dad308d8a3552198b7da35b852c6d`, Windows / Python 3.14.7: all six
   scenarios below passed again, including eight simultaneous callers.
@@ -51,6 +62,10 @@ This report does not identify every transport, mission or recovery scenario;
 the expanded mission set and presentation still need human flight assessment.
 
 - Human flight/control/balance assessment of the four added authored missions and animations.
+- rc.4 career: human assessment of the eight new missions and of the medal
+  thresholds. A scripted fuel-thrifty pilot reaches gold on every mission, by
+  11-26 points on the hardest. Game events are covered by unit tests of the
+  request files; a NetBBS bot announcing them has not been observed.
 - rc.3 presentation in real Telnet/SSH/web clients: the splash, shaded scenery and
   lander were reviewed from renderer captures, not live terminals; ASCII glyph
   mode's large scene lander is legible but busy.
