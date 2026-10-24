@@ -1,16 +1,21 @@
 # Release candidate acceptance
 
-Target: `v0.1.0-rc.2`. This is a playable candidate for field testing, not a claim
+Target: `v0.1.0-rc.3`. This is a playable candidate for field testing, not a claim
 that every NetBBS transport or target operating system has been certified.
 
 ## Completed locally
 
-- 42 unittest cases, Windows / Python 3.14.7 with development-only tzdata: flight model,
+- 47 unittest cases, Windows / Python 3.14.7 with development-only tzdata: flight model,
   discrete-control successful landings in all missions, daily reproducibility,
   real process quit/EOF/deadline, incremental keys, palettes, screen bounds,
   help/pause/retry, database concurrency/isolation/recovery refusal; node-local
   midnight and DST, active-flight date pinning, formatting-independent seeds,
-  scene lifecycle/skip/save ordering, rotating hull and colored controls/values.
+  scene lifecycle/skip/save ordering, rotating hull and colored controls/values;
+  splash hold and spent skip key, menu grid alignment, named unsafe-speed
+  warnings, stars kept off scenery and 256/16-color readings of scenery colors.
+- rc.3 visual overhaul: NetBBS 7.40.0 from an archive of pinned commit
+  `8e593794ab5dad308d8a3552198b7da35b852c6d`, Windows / Python 3.14.7: all six
+  scenarios below passed again, including eight simultaneous callers.
 - NetBBS 7.40.0, isolated tag checkout `fd8744c4d86805081f0d8470c6dc31323c9c207d`,
   Windows / Python 3.12.10 development check: real `run_door` launches at 80x24 and 132x50, flight/help/pause,
   crash/retry, clean deadline exit, caller disconnect cleanup, eight simultaneous
@@ -46,6 +51,9 @@ This report does not identify every transport, mission or recovery scenario;
 the expanded mission set and presentation still need human flight assessment.
 
 - Human flight/control/balance assessment of the four added authored missions and animations.
+- rc.3 presentation in real Telnet/SSH/web clients: the splash, shaded scenery and
+  lander were reviewed from renderer captures, not live terminals; ASCII glyph
+  mode's large scene lander is legible but busy.
 - Actual Telnet and SSH terminals, including ordinary key repeat and realistic latency.
 - Actual browser terminal, control keys and live resize.
 - NetBSD service deployment, permissions/resource limits, two callers and restore drill.
