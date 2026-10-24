@@ -26,7 +26,7 @@ import time
 import unicodedata
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.1.0-rc.4"
+VERSION = "0.1.0"
 DT = 1 / 60
 GRAVITY = 1.62
 DRY_MASS = 900.0
@@ -1828,8 +1828,14 @@ class Display:
                                  ("SILVER ", MEDAL_COLORS["SILVER"][1]), (f"{1400 * mission.difficulty}", 6)], PANEL)
         else:
             c.text(rx, y0 + 10, "Practice: no medals here", 9, PANEL)
-        notes = textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw) if daily else \
-            textwrap.wrap(record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT"), rw)
+        note = record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT")
+        if daily:
+            notes = textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw)
+        elif " / " in note:
+            # "LABEL / detail" reads as a heading and its line, not wrapped mid-phrase.
+            notes = note.split(" / ", 1)
+        else:
+            notes = textwrap.wrap(note, rw)
         for n, line in enumerate(notes[:2]):
             c.text(rx, y0 + 12 + n, plain(line, rw), 12, PANEL)
         c.text(x0 + 1, y0 + 14, rule, EDGE, PANEL)
@@ -2206,7 +2212,7 @@ class Game:
 
     def ranking_note(self) -> str:
         if not self.host.ranked:
-            return "PRACTICE ONLY / no persistent NetBBS caller identity"
+            return "PRACTICE ONLY / no persistent caller identity"
         if self.records is None:
             return "PRACTICE ONLY / pilot records unavailable"
         return "UNRANKED TRAINING" if not self.mission.difficulty else "RANKED FLIGHT / best landing per pilot"

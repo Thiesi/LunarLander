@@ -56,7 +56,7 @@ score per pilot per mission; equal scores keep the earlier achieved result.
 
 1. Download `lunar_lander.py`, `netbbs.json`, `LICENSE` and `SHA256SUMS` from the
    same tagged release. Verify the checksums before installation. Candidate
-   releases are for testing; their release notes list outstanding acceptance.
+   (`-rc`) releases are for testing; ACCEPTANCE.md lists the checks still open.
 2. Put the script and license in a persistent directory, for example
    `/var/games/netbbs/lunar-lander`. Use an installed Python 3.11+ interpreter.
 3. Import `netbbs.json` through NetBBS's door Compatibility setup. Replace
