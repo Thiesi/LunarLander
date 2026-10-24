@@ -22,7 +22,7 @@ import sys
 import time
 import unicodedata
 
-VERSION = "0.1.0-dev"
+VERSION = "0.1.0-rc.1"
 DT = 1 / 60
 GRAVITY = 1.62
 DRY_MASS = 900.0

@@ -11,12 +11,13 @@ Guide a fragile lander between lunar ridges, manage your descent, and settle
 onto an illuminated pad. Every correction costs fuel; every landing earns its
 place.
 
-**Status: design and planning.** The game is not playable yet. The banner is
-concept art for the project. Implementation and acceptance status will be
-recorded in the phase trackers linked from the
-[design and delivery plan](docs/design.md).
+**Status: playable release candidate.** Run `python lunar_lander.py` locally or
+follow the [NetBBS installation and playing guide](docs/operations.md).
+The banner is concept art; the cockpit below is rendered by the game itself.
+See [acceptance evidence and remaining field checks](docs/acceptance.md) and the
+[phase trackers](docs/design.md).
 
-The flight plan includes:
+The game includes:
 
 - Rich ANSI landscapes with stars, a distant Earth, and illuminated landing pads.
 - Deterministic lunar physics, fuel management, and precise landing checks.
@@ -24,10 +25,16 @@ The flight plan includes:
 - Persistent pilot records and leaderboards for completed safe landings.
 - Native NetBBS play at 80×24 and larger, with more scenery at 132×50.
 
-Planned runtime delivery is a single `lunar_lander.py` file for Python 3.11+,
+Runtime delivery is a single `lunar_lander.py` file for Python 3.11+,
 using only the standard library and suitable for vendoring in NetBBS.
 NetBBS's existing native door API is the integration contract; Lunar Lander
 does not require changes to it.
+
+![Actual 80x24 Lunar Lander cockpit](docs/images/cockpit-80x24.png)
+
+The [132x50 cockpit](docs/images/cockpit-132x50.png) shows the larger view.
+The game has no third-party runtime dependencies. Run the test suite with
+`python -m unittest discover -s tests -v`.
 
 The [social banner](assets/lunar-lander-social.jpg) is also ready for the
 repository's GitHub social preview. See the [artwork notes](assets/README.md)
