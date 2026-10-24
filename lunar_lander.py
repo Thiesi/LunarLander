@@ -9,20 +9,22 @@ from __future__ import annotations
 import argparse
 from bisect import bisect_right
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 import math
 import os
 from pathlib import Path
 import random
+import re
 import select
 import signal
 import sqlite3
 import sys
 import time
 import unicodedata
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.1.0-rc.1"
+VERSION = "0.1.0-rc.2"
 DT = 1 / 60
 GRAVITY = 1.62
 DRY_MASS = 900.0
@@ -60,6 +62,7 @@ class Host:
     user: int | None = None
     limit: float | None = None
     path: str | None = None
+    timezone: str = "UTC"
 
     @property
     def ranked(self) -> bool:
@@ -100,7 +103,8 @@ class Host:
                        ("16", "256", "truecolor") else "16",
                        unicode=data.get("unicode_style") is True,
                        handle=plain(data.get("handle", "Pilot")), node=node, user=user,
-                       limit=limit, path=path)
+                       limit=limit, path=path,
+                       timezone=data.get("timezone") if isinstance(data.get("timezone"), str) else "UTC")
         except (OSError, ValueError, TypeError) as exc:
             raise DoorError(f"Cannot read NetBBS launch metadata: {exc}") from exc
 
@@ -368,7 +372,7 @@ class Mission:
                       y=self.altitude, vx=self.drift, vy=-6, fuel=self.fuel, initial_fuel=self.fuel)
 
 
-def missions(day: str | None = None) -> tuple[Mission, ...]:
+def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
     day = day or datetime.now(timezone.utc).date().isoformat()
     seed = int(day.replace("-", ""))
     rng = random.Random(seed)
@@ -377,9 +381,33 @@ def missions(day: str | None = None) -> tuple[Mission, ...]:
         Mission("tranquility", "TRANQUILITY", "Cancel gentle drift above the broad western basin.", 1, 300, 90, 210, 65, -4, 85, 11),
         Mission("ridgetop", "RIDGE RUN", "Cross the ridge; a narrower pad rewards precision.", 2, 470, 65, 260, 100, -7, 78, 22),
         Mission("needle", "THE NEEDLE", "A tiny foothold. Fast approach. Make every burn count.", 3, 680, 45, 280, -110, 9, 70, 33),
-        Mission("daily-" + day, "DAILY " + day, "Same UTC-day flight for every pilot. One best score.", 2,
+        Mission("daily-" + day, "DAILY " + date.fromisoformat(day).strftime(date_format), "New at node-local midnight. One best score per pilot.", 2,
                 rng.randint(300, 700), rng.randint(55, 80), 250, 80, -6, 80, seed),
+        Mission("copernicus", "COPERNICUS", "A long descent into a broad crater. Budget your fuel.", 2, 220, 65, 300, 140, -5, 85, 44),
+        Mission("hadley", "HADLEY RILLE", "Approach the rille from the west. Arrest the drift.", 3, 530, 50, 270, -125, 7, 76, 55),
+        Mission("farside", "FAR SIDE", "A fast eastern run toward a small, isolated pad.", 4, 780, 45, 310, -120, 12, 70, 66),
+        Mission("polar", "POLAR APPROACH", "A narrow foothold and a lean tank. Fly precisely.", 4, 180, 45, 290, 140, -11, 65, 77),
     )
+
+
+class DailyClock:
+    """Calendar boundaries use the host's IANA zone, never a fixed UTC offset."""
+    def __init__(self, zone: str = "UTC", date_format: str = "%Y-%m-%d", now=None):
+        self.warning = ""
+        try:
+            self.zone = timezone.utc if zone == "UTC" else ZoneInfo(zone)
+        except (ValueError, ZoneInfoNotFoundError):
+            self.zone = timezone.utc
+            self.warning = "Node timezone unavailable; daily challenge uses UTC."
+        # Portable date-only strftime subset; keep custom text out of the HUD.
+        if len(date_format) > 32 or not re.fullmatch(r"(?:%[YymdbBaA]|[ ./,\-])+", date_format):
+            date_format = "%Y-%m-%d"
+            self.warning = (self.warning + " Invalid date format; using ISO.").strip()
+        self.date_format = date_format
+        self.now = now or (lambda: datetime.now(timezone.utc))
+
+    def day(self) -> str:
+        return self.now().astimezone(self.zone).date().isoformat()
 
 
 class Records:
@@ -459,6 +487,7 @@ COLORS = (
     ((85, 119, 151), 67, 36),     # 9 subdued text
     ((45, 132, 174), 31, 94),     # 10 Earth
     ((196, 221, 217), 152, 97),   # 11 cloud
+    ((183, 158, 235), 183, 95),  # 12 attitude / violet
 )
 
 
@@ -489,6 +518,27 @@ class Canvas:
                 self.put(x + 1, y, "", fg, bg)
             x += width
 
+    def rich(self, x: int, y: int, parts: list[tuple[str, int]], bg: int = 0, limit: int | None = None):
+        end = self.width if limit is None else min(self.width, x + limit)
+        for text, color in parts:
+            text = plain(text, max(0, end - x))
+            self.text(x, y, text, color, bg)
+            x += sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+    def annotated(self, x: int, y: int, text: str, bg: int = 0, limit: int | None = None):
+        """Trusted menu copy: muted brackets, amber keys, ivory labels, cyan values."""
+        parts, start = [], 0
+        for match in re.finditer(r"\[[^\]]+\]|[+-]?\d+(?:\.\d+)?%?", text):
+            parts.append((text[start:match.start()], 7))
+            value = match.group()
+            if value.startswith("["):
+                parts.extend((("[", 9), (value[1:-1], 5), ("]", 9)))
+            else:
+                parts.append((value, 6))
+            start = match.end()
+        parts.append((text[start:], 7))
+        self.rich(x, y, parts, bg, limit)
+
     def panel(self, x: int, y: int, width: int, lines: list[str], unicode: bool = True):
         width = min(width, self.width - x)
         horizontal, vertical = ("─", "│") if unicode else ("-", "|")
@@ -498,9 +548,58 @@ class Canvas:
         self.text(x, y, "+" + horizontal * (width - 2) + "+", 5, 1)
         for n, line in enumerate(lines, y + 1):
             self.text(x, n, vertical, 5, 1)
-            self.text(x + 2, n, plain(line, width - 4), 7, 1)
+            self.annotated(x + 2, n, line, 1, width - 4)
             self.text(x + width - 1, n, vertical, 5, 1)
         self.text(x, y + len(lines) + 1, "+" + horizontal * (width - 2) + "+", 5, 1)
+
+
+def paint_pixels(canvas: Canvas, pixels: dict[tuple[int, int], int], unicode: bool = True):
+    """Overlay square half-cell pixels without erasing the surrounding scenery."""
+    for x, row in sorted({(x, y // 2) for x, y in pixels}):
+        if not (0 <= x < canvas.width and 0 <= row < canvas.height):
+            continue
+        char, fg, bg = canvas.cells[row][x]
+        upper = pixels.get((x, row * 2), fg if char == "▀" else bg)
+        lower = pixels.get((x, row * 2 + 1), bg)
+        if unicode:
+            canvas.put(x, row, "▀" if upper != lower else " ", upper, lower)
+        else:
+            color = pixels.get((x, row * 2), pixels.get((x, row * 2 + 1), 5))
+            canvas.put(x, row, "#" if color == 5 else "+" if color == 6 else ".", color, bg)
+
+
+def lander_pixels(angle: float, throttle: float = 0, phase: float = 0) -> dict[tuple[int, int], int]:
+    """Rotate the entire cabin, feet and exhaust in square-pixel space."""
+    a = math.radians(angle)
+
+    def turn(x, y):
+        return round(x * math.cos(a) - y * math.sin(a)), round(x * math.sin(a) + y * math.cos(a))
+
+    pixels = {}
+    for p, q in (((-1, -2), (1, -2)), ((1, -2), (1, 0)), ((1, 0), (-1, 0)),
+                 ((-1, 0), (-1, -2)), ((-1, 0), (-2, 2)), ((1, 0), (2, 2)),
+                 ((-3, 2), (-1, 2)), ((1, 2), (3, 2))):
+        for n in range(13):
+            pixels[turn(p[0] + (q[0] - p[0]) * n / 12, p[1] + (q[1] - p[1]) * n / 12)] = 5
+    pixels[turn(0, -1)] = 6
+    if throttle > 0:
+        length = 2 + round(throttle * 2) + int(phase * 10) % 2
+        for y in range(1, length + 1):
+            pixels[turn(0, y)] = 7 if y < 3 else 8
+    return pixels
+
+
+def draw_lander(canvas: Canvas, x: int, row: int, angle: float, throttle: float,
+                phase: float, unicode: bool, scale: int = 1):
+    pixels = {}
+    for (px, py), color in lander_pixels(angle, throttle, phase).items():
+        for dx in range(scale):
+            for dy in range(scale):
+                pixels[x + px * scale + dx, row * 2 + py * scale + dy] = color
+    paint_pixels(canvas, pixels, unicode)
+
+
+SCENE_SECONDS = {"splash": 3.2, "launch": 1.1, "landing": 2.4, "crash": 1.8}
 
 
 class Display:
@@ -531,15 +630,75 @@ class Display:
         self.previous = canvas.cells
         return "".join(output)
 
+    def scene(self, c: Canvas, kind: str, age: float, flight: Flight, record_note: str) -> Canvas:
+        width, height = c.width, c.height
+        horizon = height - 7
+        stars = random.Random(1969)
+        for _ in range(width * height // 40):
+            c.put(stars.randrange(width), stars.randrange(2, horizon), ".", 9)
+        # Layered lunar horizon; the camera is still while the scene moves.
+        for x in range(width):
+            ridge = horizon + round(math.sin(x / 13) + math.sin(x / 7))
+            for row in range(max(0, ridge), height - 3):
+                c.put(x, row, " " if self.host.unicode else "#", 2, 2 if self.host.unicode else 0)
+            c.put(x, ridge, "▀" if self.host.unicode else "_", 4, 2 if self.host.unicode else 0)
+        center = width // 2
+        pad_row = horizon + 1
+        for x in range(center - 10, center + 11):
+            c.put(x, pad_row, "═" if self.host.unicode else "=", 6)
+        title = {"splash": "LUNAR LANDER", "launch": "GO FOR DESCENT",
+                 "landing": "CONTACT LIGHT", "crash": "SIGNAL LOST"}[kind]
+        c.text(2, 0, "LUNAR LANDER / APPROACH CONTROL", 9)
+        spaced = "  ".join(title)
+        c.text(max(2, center - len(spaced) // 2), 2, spaced, 5 if kind != "crash" else 8)
+        subtitle = {"splash": "A quiet sky. A small ship. Make both feet count.",
+                    "launch": "Attitude control online / descent engine ready",
+                    "landing": "Engine stop. Welcome to the Moon.",
+                    "crash": "Telemetry lost. Flight recorder recovered."}[kind]
+        c.text(max(2, center - len(subtitle) // 2), 4, subtitle, 7)
+        progress = min(1, age / SCENE_SECONDS[kind])
+        if kind == "splash":
+            x = round(center + (1 - progress) * width * .25)
+            row = round(8 + progress * (pad_row - 10))
+            draw_lander(c, x, row, -20 * (1 - progress), .7 if progress < .9 else 0, age, self.host.unicode, 2)
+            c.text(center - 14, height - 5, "NETBBS / PRECISION FLIGHT", 6)
+        elif kind == "launch":
+            draw_lander(c, center, horizon - 3 - round(progress * 2), 0, progress, age, self.host.unicode, 2)
+            c.text(center - 13, height - 5, "CHECKS " + "+ " * min(5, int(progress * 6)), 6)
+        elif kind == "landing":
+            draw_lander(c, center, pad_row - 2, flight.angle, 0, age, self.host.unicode, 2)
+            for n in range(16):
+                side = -1 if n % 2 else 1
+                x = center + side * round(4 + age * (2 + n % 6))
+                row = pad_row - int(math.sin(progress * math.pi) * (n % 3))
+                if age < 2:
+                    c.put(x, row, ".", 4 if progress < .5 else 9)
+            c.annotated(max(2, center - len(record_note) // 2), height - 5, record_note or "SAFE LANDING", limit=width - 4)
+        else:
+            if age < .2:
+                draw_lander(c, center, pad_row - 2, flight.angle, 0, 0, self.host.unicode, 2)
+            for n in range(20):
+                angle = n * math.tau / 20
+                distance = 1 + age * (4 + n % 5)
+                x = center + round(math.cos(angle) * distance)
+                row = min(pad_row, pad_row - 2 + round(math.sin(angle) * distance / 2 + age * age))
+                c.put(x, row, "*" if age < .5 else ".", 8 if age < .5 else 5 if age < 1 else 9)
+            c.text(2, height - 5, plain(flight.reason, width - 4), 7)
+        c.annotated(center - 16, height - 2, "[SPACE] Skip scene   [Q] Quit")
+        return c
+
     def draw(self, flight: Flight, mode: str = "flying", remaining: float | None = None,
              slow: bool = False, mission: Mission | None = None,
-             standings: list | None = None, record_note: str = "") -> Canvas:
+             standings: list | None = None, record_note: str = "", scene_age: float = 0,
+             clock_note: str = "") -> Canvas:
         mission = mission or missions()[0]
         c = Canvas(self.host.width, self.host.height)
         if self.host.width < 80 or self.host.height < 24:
             c.text(0, 0, "Resize to 80x24. Q: exit", 5)
             c.text(0, 2, "Flight paused; session timer continues.", 7)
             return c
+        if mode in SCENE_SECONDS:
+            return self.scene(c, mode, scene_age, flight, record_note)
         width, height = c.width, c.height
         ground = flight.terrain
         altitude = max(0, flight.y - ground.height(flight.x) - 3)
@@ -605,11 +764,8 @@ class Display:
         if flight.status == "crashed":
             c.text(sx - 2, sy, "* X *", 8)
         else:
-            nose = "/^\\" if abs(flight.angle) <= 10 else " /=" if flight.angle > 0 else "=\\ "
-            c.text(sx - 1, sy - 1, nose, 5)
-            c.text(sx - 2, sy, "/[_]\\", 5)
-            if flight.throttle and flight.fuel > 0 and flight.status == "flying":
-                c.text(sx - 1, sy + 1, " v " if flight.throttle < .5 else "V V", 8)
+            power = flight.throttle if flight.fuel > 0 and flight.status == "flying" else 0
+            draw_lander(c, sx, sy, flight.angle, power, flight.elapsed, self.host.unicode)
         c.text(2, 0, "L U N A R   L A N D E R", 5)
         c.text(width - 28, 0, "FLIGHT / " + mission.name, 9)
         c.text(2, 1, "PILOT " + self.host.handle, 7)
@@ -623,32 +779,38 @@ class Display:
                 (2 + width * 3 // 4, "FUEL", f"{flight.fuel:5.1f} kg", 8 if flight.fuel < 15 else 5)):
             c.text(x, row + 1, title, 9)
             c.text(x, row + 2, value, color)
-        c.text(2, row + 3, f"THRUST [{'|' * round(flight.throttle * 10):10}] {flight.throttle:4.0%}  TILT {flight.angle:+3.0f} deg", 5)
+        c.rich(2, row + 3, [("THRUST ", 9), (f"{'|' * round(flight.throttle * 10):10} {flight.throttle:4.0%}", 5),
+                           ("  TILT ", 9), (f"{flight.angle:+3.0f} deg", 12)])
         message = "LAND: |V|<=3 |H|<=2 TILT<=10"
         if remaining is not None and remaining < 60:
             message = f"SESSION ENDS IN {max(0, remaining):.0f}s"
         elif slow:
             message = "SLOW LINK: SIMULATION PACED"
-        c.text(46, row + 3, message, 6)
-        c.text(2, row + 5, "A/D tilt  W/S throttle  0-9 power  SPACE cut  X level", 7)
-        c.text(2, row + 6, "P pause  ? flight manual  Q quit", 9)
+        if message.startswith("LAND:"):
+            c.rich(46, row + 3, [("LAND V<=", 9), ("3", 6), (" H<=", 9), ("2", 5), (" T<=", 9), ("10", 12)])
+        else:
+            c.text(46, row + 3, message, 6)
+        c.annotated(2, row + 5, "[A/D] Tilt [W/S] Thrust [0-9] Power [SPACE] Cut [X] Level")
+        c.annotated(2, row + 6, "[P] Pause  [?] Flight manual  [Q] Quit")
         lines = None
         if mode == "menu":
             lines = ["LUNAR LANDER / FLIGHT DIRECTOR", "",
-                     "1 Training     2 Tranquility     3 Ridge Run",
-                     "4 The Needle   5 Daily Challenge", "",
+                     "[1] Training   [2] Tranquility   [3] Ridge Run",
+                     "[4] The Needle [5] Daily        [6] Copernicus",
+                     "[7] Hadley     [8] Far Side     [9] Polar Approach", "",
                      "SELECTED: " + mission.name, mission.description,
                      record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT"), "",
-                     "A/D tilt | W/S throttle | SPACE cut | X level",
+                     "[A/D] Tilt | [W/S] Throttle | [SPACE] Cut | [X] Level",
                      "Touchdown: |vertical|<=3 m/s |drift|<=2 |tilt|<=10", "",
+                     clock_note,
                      "[ENTER] Launch  [B] Best pilots  [?] Manual  [Q] Return"]
         elif mode == "paused":
             lines = ["FLIGHT PAUSED", "", "[P] Resume flight     [?] Manual     [Q] Return",
                      "The NetBBS session timer continues while paused."]
         elif mode == "help":
             lines = ["FLIGHT MANUAL / A LITTLE THRUST GOES A LONG WAY", "",
-                     "W/S: throttle +/-10%. Digits: 0 off to 9 full.",
-                     "A/D: tilt +/-10 degrees. X: upright. SPACE: cut.",
+                     "[W/S] Throttle +/-10%. Digits: [0] off to [9] full.",
+                     "[A/D] Tilt +/-10 degrees. [X] Upright. [SPACE] Cut.",
                      "Controls stay set; you never need to hold two keys.", "",
                      "Burn early to slow descent. Tilt against your drift.",
                      "Watch VERTICAL: negative means falling toward the Moon.",
@@ -679,17 +841,43 @@ class Display:
 
 
 class Game:
-    def __init__(self, host: Host | None = None, records: Records | None = None):
+    def __init__(self, host: Host | None = None, records: Records | None = None,
+                 *, clock: DailyClock | None = None, scenes: bool = False, splash: bool = False):
         self.host, self.records = host or Host(), records
-        self.missions = missions()
+        self.clock = clock or DailyClock(self.host.timezone)
+        self.day = self.clock.day()
+        self.missions = missions(self.day, self.clock.date_format)
+        self.selected = 0
         self.mission = self.missions[0]
         self.flight = self.mission.launch()
-        self.mode = "menu"
+        self.mode = "splash" if splash else "menu"
+        self.scenes = scenes
+        self.scene_age = 0.0
         self.before_help = "menu"
         self.accumulator = 0.0
         self.slow = False
         self.standings = []
         self.record_note = ""
+
+    def refresh_daily(self):
+        day = self.clock.day()
+        if day != self.day:
+            self.day = day
+            self.missions = missions(day, self.clock.date_format)
+            self.mission = self.missions[self.selected]
+            self.flight = self.mission.launch()
+            self.record_note = self.ranking_note()
+
+    def launch(self):
+        self.refresh_daily()
+        self.flight = self.mission.launch()
+        self.mode = "launch" if self.scenes else "flying"
+        self.scene_age = self.accumulator = 0
+        self.record_note = self.ranking_note()
+
+    def finish_scene(self):
+        self.mode = {"splash": "menu", "launch": "flying", "landing": "debrief", "crash": "debrief"}[self.mode]
+        self.scene_age = self.accumulator = 0
 
     def ranking_note(self) -> str:
         if not self.host.ranked:
@@ -700,6 +888,9 @@ class Game:
 
     def key(self, key: str) -> bool:
         """Return True on a screen transition: discard remaining typed-ahead keys."""
+        if self.mode in SCENE_SECONDS:
+            self.finish_scene()
+            return True
         if key == "?" or (key == "escape" and self.mode == "help"):
             if self.mode == "help":
                 self.mode = self.before_help
@@ -707,11 +898,12 @@ class Game:
                 self.before_help, self.mode = self.mode, "help"
             return True
         if self.mode == "menu" and key == "enter":
-            self.flight, self.mode = self.mission.launch(), "flying"
-            self.record_note = self.ranking_note()
+            self.launch()
             return True
-        if self.mode == "menu" and key in ("1", "2", "3", "4", "5"):
-            self.mission = self.missions[int(key) - 1]
+        if self.mode == "menu" and key in tuple("123456789"):
+            self.refresh_daily()
+            self.selected = int(key) - 1
+            self.mission = self.missions[self.selected]
             self.flight = self.mission.launch()
             self.record_note = self.ranking_note()
             return True
@@ -727,19 +919,33 @@ class Game:
             return True
         if self.mode == "scores" and key in ("b", "escape"):
             self.mode = "menu"
+            self.refresh_daily()
             return True
         if self.mode in ("flying", "paused") and key == "p":
             self.mode = "paused" if self.mode == "flying" else "flying"
             return True
         if self.mode == "debrief" and key in ("r", "m"):
-            self.flight, self.mode = self.mission.launch(), "flying" if key == "r" else "menu"
-            self.record_note = self.ranking_note()
+            if key == "r":
+                self.launch()
+            else:
+                self.mode = "menu"
+                self.refresh_daily()
+                self.flight = self.mission.launch()
+                self.record_note = self.ranking_note()
             return True
         if self.mode == "flying":
             self.flight.command(key)
         return False
 
     def tick(self, elapsed: float, size_ok: bool):
+        if self.mode == "menu":
+            self.refresh_daily()
+        if self.mode in SCENE_SECONDS:
+            if size_ok:
+                self.scene_age += elapsed
+                if self.scene_age >= SCENE_SECONDS[self.mode]:
+                    self.finish_scene()
+            return
         if self.mode != "flying" or not size_ok:
             self.accumulator = 0
             return
@@ -756,7 +962,8 @@ class Game:
                     except sqlite3.Error as exc:
                         self.record_note = "Landing not saved: storage error. Ask your SysOp."
                         print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
-                self.mode, self.accumulator = "debrief", 0
+                self.mode = ("landing" if self.flight.status == "landed" else "crash") if self.scenes else "debrief"
+                self.accumulator = self.scene_age = 0
                 break
 
 
@@ -785,7 +992,11 @@ def run(host: Host, started: float) -> int:
             records = Records(root / "pilots.db")
         except DoorError as exc:
             print("Lunar Lander: " + plain(str(exc), 200), file=sys.stderr)
-    game = Game(host, records)
+    clock = DailyClock(host.timezone, os.environ.get("DOOR_LL_DATE_FORMAT", "%Y-%m-%d"))
+    if clock.warning:
+        print("Lunar Lander: " + clock.warning, file=sys.stderr)
+    game = Game(host, records, clock=clock, scenes=os.environ.get("DOOR_LL_SCENES") != "0",
+                splash=os.environ.get("DOOR_LL_SPLASH") != "0")
     game.record_note = game.ranking_note()
     next_check = 0.0
     next_frame = 0.0
@@ -807,7 +1018,8 @@ def run(host: Host, started: float) -> int:
                 if now >= next_frame:
                     remaining = None if deadline is None else deadline - now
                     frame = display.draw(game.flight, game.mode, remaining, game.slow,
-                                         game.mission, game.standings, game.record_note)
+                                         game.mission, game.standings, game.record_note, game.scene_age,
+                                         clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30))
                     terminal.write(display.encode(frame))
                     next_frame = now + .1
                 data = terminal.read()

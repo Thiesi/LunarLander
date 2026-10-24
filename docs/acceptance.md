@@ -1,17 +1,19 @@
 # Release candidate acceptance
 
-Target: `v0.1.0-rc.1`. This is a playable candidate for field testing, not a claim
+Target: `v0.1.0-rc.2`. This is a playable candidate for field testing, not a claim
 that every NetBBS transport or target operating system has been certified.
 
 ## Completed locally
 
-- 29 standard-library unittest cases, Windows / Python 3.14.7: flight model,
+- 42 unittest cases, Windows / Python 3.14.7 with development-only tzdata: flight model,
   discrete-control successful landings in all missions, daily reproducibility,
   real process quit/EOF/deadline, incremental keys, palettes, screen bounds,
-  help/pause/retry, database concurrency/isolation/recovery refusal.
+  help/pause/retry, database concurrency/isolation/recovery refusal; node-local
+  midnight and DST, active-flight date pinning, formatting-independent seeds,
+  scene lifecycle/skip/save ordering, rotating hull and colored controls/values.
 - NetBBS 7.40.0, isolated tag checkout `fd8744c4d86805081f0d8470c6dc31323c9c207d`,
   Windows / Python 3.12.10 development check: real `run_door` launches at 80x24 and 132x50, flight/help/pause,
-  crash/retry, clean deadline exit, caller disconnect cleanup, two simultaneous
+  crash/retry, clean deadline exit, caller disconnect cleanup, eight simultaneous
   callers and return to host mode. All six scenarios passed. The imported module
   path and version were checked against that isolated checkout. This rerun replaces
   the earlier inconsistent provenance claim: `d04170aa` belongs to the 7.31.0 line,
@@ -19,7 +21,9 @@ that every NetBBS transport or target operating system has been certified.
   The Windows development runtime does not forward native resize because SIGUSR1
   is POSIX-only; that scenario was explicitly not run on Windows.
 - Inspected rendered 80x24 and 132x50 cockpit captures, briefing and help. Layout
-  tests cover 16/256/truecolor and ASCII/Unicode. A sample default 80x24 frame was
+  tests cover 16/256/truecolor and ASCII/Unicode. Animated arrival, ignition,
+  landing and crash captures are generated from the actual terminal renderer.
+  A sample rc.1 default 80x24 frame was
   8,251 bytes initially and 112 bytes after 0.1 seconds of early flight; camera
   transitions and large screens require more bandwidth. These are not worst-case
   network measurements.
@@ -32,9 +36,14 @@ Linux and Windows with Python 3.11 (Windows is development evidence), pinned to 
 resize down to 70x20 and back to 132x50. Inspect the workflow run associated with
 the release commit; a pending or skipped job is not passing evidence.
 
-## Field gates before stable v1
+## ReLink playtest and remaining field gates
 
-- Human flight/control/balance assessment on training and all three authored missions.
+ReLink reported a successful general playtest and enjoyable gameplay, with
+deployment feedback in #14. That feedback is addressed in this candidate.
+This report does not identify every transport, mission or recovery scenario;
+the expanded mission set and presentation still need human flight assessment.
+
+- Human flight/control/balance assessment of the four added authored missions and animations.
 - Actual Telnet and SSH terminals, including ordinary key repeat and realistic latency.
 - Actual browser terminal, control keys and live resize.
 - NetBSD service deployment, permissions/resource limits, two callers and restore drill.

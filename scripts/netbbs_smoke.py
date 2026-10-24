@@ -87,7 +87,7 @@ async def check(root, captures, width, height, scenario):
         try:
             player = create_user(db, "MoonPilot", password="acceptance-only", user_level=255)
             value = json.loads((ROOT / "profiles/netbbs.json").read_text())
-            value["profile"].update(install_dir=str(ROOT), max_sessions=2, multinode_certified=True,
+            value["profile"].update(install_dir=str(ROOT),
                                     environment={"DOOR_LL_DATA_DIR": str(directory / "records")})
             profile = DoorProfile.from_json(json.dumps(value["profile"]))
             door = create_door(db, "Lunar Lander acceptance", sys.executable,
@@ -96,7 +96,7 @@ async def check(root, captures, width, height, scenario):
             limit = 3 if scenario == "deadline" else 30
             task = asyncio.create_task(run_door(caller, lane, door, player, wall_time_limit_seconds=limit))
             tasks.append(task)
-            await caller.until("FLIGHT DIRECTOR", task)
+            await caller.until("LUNAR LANDER", task)
             if scenario == "deadline":
                 result = await asyncio.wait_for(task, 6)
                 assert result.reason == "exited", result
@@ -105,7 +105,13 @@ async def check(root, captures, width, height, scenario):
                 result = await asyncio.wait_for(task, 8)
                 assert result.reason == "caller_disconnected", result
             else:
+                # A real caller can skip the intro and ignition without leaking
+                # those keys into the menu or flight controls.
+                caller.send(" ")
+                await caller.until("FLIGHT DIRECTOR", task)
                 caller.send("\r")
+                await asyncio.sleep(.15)
+                caller.send(" ")
                 await asyncio.sleep(.3)
                 caller.send("p")
                 await caller.until("FLIGHT PAUSED", task)
@@ -129,12 +135,19 @@ async def check(root, captures, width, height, scenario):
                     await caller.until("ALTITUDE", task)
                     assert len(caller.screen.text_rows()) == 50
                 elif scenario == "concurrent":
-                    second = Caller(width, height)
-                    other = asyncio.create_task(run_door(second, lane, door, player, wall_time_limit_seconds=20))
-                    tasks.append(other)
-                    await second.until("FLIGHT DIRECTOR", other)
-                    second.send("q")
-                    assert (await asyncio.wait_for(other, 8)).reason == "exited"
+                    others = []
+                    for n in range(1, profile.max_sessions):
+                        other_player = create_user(db, f"MoonPilot{n}", password="acceptance-only", user_level=255)
+                        second = Caller(width, height)
+                        other = asyncio.create_task(run_door(second, lane, door, other_player, wall_time_limit_seconds=20))
+                        tasks.append(other)
+                        others.append((second, other))
+                    await asyncio.gather(*(session.until("FLIGHT DIRECTOR", child) for session, child in others))
+                    for session, _ in others:
+                        session.send("q")
+                    results = await asyncio.wait_for(asyncio.gather(*(child for _, child in others)), 8)
+                    assert all(r.reason == "exited" for r in results), results
+                    print(f"PASS {profile.max_sessions} distinct simultaneous callers", flush=True)
                 caller.send("q")
                 result = await asyncio.wait_for(task, 8)
                 assert result.reason == "exited" and result.exit_code == 0, result

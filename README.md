@@ -21,8 +21,11 @@ The game includes:
 
 - Rich ANSI landscapes with stars, a distant Earth, and illuminated landing pads.
 - Deterministic lunar physics, fuel management, and precise landing checks.
-- A training basin, three authored challenges, and a seeded daily challenge.
+- A training basin, seven authored challenges, and a daily challenge that changes
+  at the NetBBS node's local midnight.
+- Animated arrival, ignition, touchdown and crash scenes, with a rotating lander.
 - Persistent pilot records and leaderboards for completed safe landings.
+- Up to eight concurrent callers with independent flights and shared leaderboards.
 - Native NetBBS play at 80×24 and larger, with more scenery at 132×50.
 
 Runtime delivery is a single `lunar_lander.py` file for Python 3.11+,
@@ -33,8 +36,11 @@ does not require changes to it.
 ![Actual 80x24 Lunar Lander cockpit](docs/images/cockpit-80x24.png)
 
 The [132x50 cockpit](docs/images/cockpit-132x50.png) shows the larger view.
+The [arrival animation](docs/images/splash.gif) is captured from the terminal renderer.
 The game has no third-party runtime dependencies. Run the test suite with
-`python -m unittest discover -s tests -v`.
+`python -m unittest discover -s tests -v`. Windows development tests also need
+`pip install tzdata` for the named-timezone cases; production POSIX hosts use
+their system timezone database.
 
 The [social banner](assets/lunar-lander-social.jpg) is also ready for the
 repository's GitHub social preview. See the [artwork notes](assets/README.md)
