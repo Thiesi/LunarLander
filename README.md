@@ -1,4 +1,4 @@
-![Lunar Lander — a gold spacecraft descends toward a cyan-lit landing pad beneath an indigo sky and a distant Earth.](assets/lunar-lander-social.png)
+![Lunar Lander — a gold spacecraft descends toward a cyan-lit landing pad beneath an indigo sky and a distant Earth.](assets/lunar-lander-social.jpg)
 
 # Lunar Lander
 
@@ -29,7 +29,7 @@ using only the standard library and suitable for vendoring in NetBBS.
 NetBBS's existing native door API is the integration contract; Lunar Lander
 does not require changes to it.
 
-The [social banner](assets/lunar-lander-social.png) is also ready for the
+The [social banner](assets/lunar-lander-social.jpg) is also ready for the
 repository's GitHub social preview. See the [artwork notes](assets/README.md)
 for the generation prompt and upload instructions.
 
