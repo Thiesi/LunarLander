@@ -9,8 +9,9 @@ python lunar_lander.py
 ```
 
 No packages are required. Local play has no NetBBS account and is unranked.
-Choose a mission with 1–9, then Enter. A/D or left/right tilt; W/S or up/down
-adjust throttle. The setting stays put when you release the key. Digits select
+In the flight director, up/down (or W/S) choose a mission, left/right (or A/D)
+switch chapter, and digits jump to a mission on the tab; Enter launches. In flight,
+A/D or left/right tilt; W/S or up/down adjust throttle. The setting stays put when you release the key. Digits select
 power from 0 (off) to 9 (full); Space cuts thrust and X levels the craft.
 P pauses; ? opens the manual. Q returns to the BBS, which the screens name using
 NetBBS's `node_name` (or "NetBBS" when it is absent). During a flight, or while
@@ -23,9 +24,25 @@ must be at most 3 m/s, horizontal speed at most 2 m/s, and tilt at most 10 degre
 The displayed craft is an enlarged navigation symbol; numeric altitude and the
 pad lights are the precise references. The camera scale changes near the surface.
 
-Tranquility, Ridge Run and The Needle increase drift and landing difficulty.
-Copernicus, Hadley Rille, Far Side and Polar Approach add longer crossings,
-opposing drift and tighter fuel margins. All nine choices are available immediately.
+Missions are grouped in chapters, all open from the start:
+
+- **Maria**: the training basin, Tranquility, Mare Serenitatis, Copernicus,
+  Mare Imbrium and Mare Crisium. Broad pads, gentle drift, a steep entry at the end.
+- **Highlands**: Ridge Run, Descartes Uplands, Hadley Rille, The Needle and
+  Apennine Front. Rough terrain and narrower pads.
+- **Frontier**: Far Side, Polar Approach, Tsiolkovsky, Shackleton Rim and Aitken
+  Basin. Fast entries, strong drift and lean tanks; difficulty up to five.
+- **Daily**: the day's challenge.
+
+Every safe landing on a ranked mission earns a medal from the pilot's best score
+there, per point of the mission's difficulty: bronze for any safe landing, silver
+from 1,400 and gold from 1,750. Medals count toward a career rank (gold 3 points,
+silver 2, bronze 1): Cadet, Pilot (3), Flight Officer (8), LM Pilot (15),
+Commander (23), Mission Commander (32) and Lunar Ace (45, every mission gold).
+Medals and ranks are read from the existing best scores, so pilots from earlier
+releases keep what they earned and no migration is needed. The daily challenge
+shows today's medal but does not count toward rank. Callers without a NetBBS
+identity earn medals for the session only.
 The daily challenge changes at midnight in the node's published IANA timezone,
 including daylight-saving transitions. Everyone gets the same flight for a given
 calendar date; terrain and starting conditions change between dates. An active
@@ -48,7 +65,10 @@ score per pilot per mission; equal scores keep the earlier achieved result.
    service installation; adjust them to your interpreter and game directory.
 4. Give the BBS service account read access to the script and write access to the
    chosen data directory. Keep the entry SysOp-only until Test as SysOp and real
-   caller transport checks pass. Do not enable outbound posting; LL does not use it.
+   caller transport checks pass. LL never posts to boards or chat. To have a chat
+   bot announce promotions and first gold medals, and to answer `!top` with the
+   node's career standings, enable the door's outbound hook and switch game events
+   on (NetBBS door API 5). Only ranked pilots' live, saved results are reported.
 5. Keep UTF-8 encoding and native stdio. The profile follows caller size (0x0),
    opts into resize signals, and allows eight simultaneous callers with
    `max_sessions: 8` and `multinode_certified: true`. Existing installations must

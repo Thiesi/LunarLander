@@ -28,7 +28,7 @@ class DailyTests(unittest.TestCase):
         clock = ll.DailyClock("Europe/Berlin", "%d.%m.%Y", now=lambda: now[0])
         self.assertFalse(clock.warning)
         game = ll.Game(clock=clock)
-        game.key("5")
+        game.key("left")  # the chapter tabs wrap round to DAILY
         self.assertEqual(game.mission.name, "DAILY 24.10.2026")
         game.key("enter")
         now[0] = datetime(2026, 10, 24, 22, 1, tzinfo=timezone.utc)
@@ -108,13 +108,20 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual({(-x, y): role for (x, y), role in medium[0].items()}, medium[1])
 
     def test_menu_missions_share_one_grid(self):
-        canvas = ll.Display(ll.Host()).draw(ll.training(), "menu")
-        rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
-        listed = [row for row in rows if ll.re.search(r"\[[1-9]\] ", row)]
-        self.assertEqual(len(listed), 9)
-        self.assertEqual(len({row.index("]") for row in listed}), 1)
-        # Difficulty pips start in one column whatever the mission's name.
-        self.assertEqual(len({min(i for i in (row.find("■"), row.find("free")) if i >= 0) for row in listed}), 1)
+        brackets, pips = set(), set()
+        for n, chapter in enumerate(ll.CHAPTERS):
+            with self.subTest(chapter=chapter.key):
+                shelf = ll.chapter_missions(chapter, ll.missions())
+                canvas = ll.Display(ll.Host()).draw(ll.training(), "menu", mission=shelf[-1],
+                                                    deck=ll.Deck(chapter=n))
+                rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
+                listed = [row for row in rows if ll.re.search(r"\[[1-9]\] ", row)]
+                self.assertEqual(len(listed), len(shelf))
+                self.assertIn(chapter.name, " ".join(rows))
+                brackets |= {row.index("]") for row in listed}
+                # Difficulty pips start in one column whatever the mission's name.
+                pips |= {min(i for i in (row.find("■"), row.find("free")) if i >= 0) for row in listed}
+        self.assertEqual((len(brackets), len(pips)), (1, 1))
 
     def test_stars_never_sit_on_scenery(self):
         display = ll.Display(ll.Host(132, 50))
@@ -279,8 +286,14 @@ class SceneLifecycleTests(unittest.TestCase):
                 game.tick(.1, True)
                 self.assertEqual(game.mode, "landing")
                 self.assertEqual(len(records.top(host, game.mission)), 1)
-                game.key("r")
-                self.assertEqual(game.mode, "debrief")
+                # A first, soft landing: gold, which promotes a cadet. Each skip key
+                # is spent on its own scene, never on the debrief behind them.
+                self.assertEqual((game.award.medal, game.award.promoted), ("GOLD", "PILOT"))
+                shown = []
+                for _ in range(3):
+                    game.key("r")
+                    shown.append(game.mode)
+                self.assertEqual(shown, ["medal", "promotion", "debrief"])
                 self.assertEqual(len(records.top(host, game.mission)), 1)
             finally:
                 records.close()

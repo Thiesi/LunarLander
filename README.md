@@ -21,8 +21,11 @@ The game includes:
 
 - Rich ANSI landscapes with stars, a distant Earth, and illuminated landing pads.
 - Deterministic lunar physics, fuel management, and precise landing checks.
-- A training basin, seven authored challenges, and a daily challenge that changes
-  at the NetBBS node's local midnight.
+- A training basin and fifteen ranked missions in three chapters (Maria, Highlands,
+  Frontier), plus a daily challenge that changes at the NetBBS node's local midnight.
+- Gold, silver and bronze medals for every landing, and a career from Cadet to
+  Lunar Ace, celebrated with a medal ceremony and fireworks on promotion.
+  Promotions and first golds can be announced through NetBBS game events.
 - A title splash after the banner art: sunrise over the ranges, a powered
   descent onto the pad and a pixel wordmark, then ignition, touchdown and crash
   scenes. The gold-foil lander tilts with its plume and kicks up dust near the ground.
@@ -38,7 +41,9 @@ does not require changes to it.
 ![Actual 80x24 Lunar Lander cockpit](docs/images/cockpit-80x24.png)
 
 The [132x50 cockpit](docs/images/cockpit-132x50.png) shows the larger view.
-The [arrival animation](docs/images/splash.gif) is captured from the terminal renderer.
+The [arrival animation](docs/images/splash.gif), the [flight director](docs/images/menu-80x24.png),
+the [medal ceremony](docs/images/medal.gif) and the [promotion](docs/images/promotion.gif)
+are captured from the terminal renderer.
 The game has no third-party runtime dependencies. Run the test suite with
 `python -m unittest discover -s tests -v`. Windows development tests also need
 `pip install tzdata` for the named-timezone cases; production POSIX hosts use

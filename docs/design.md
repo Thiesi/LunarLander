@@ -209,6 +209,13 @@ peaked parallax ranges, a lit Earth, a gold-foil lander in three sizes with a
 flickering plume and ground dust, framed cards over a dimmed cockpit, and a
 splash that holds under its prompt until a key.
 
+The career release adds chapters (Maria, Highlands, Frontier, Daily) with fifteen
+ranked missions, medals derived from best scores (bronze any safe landing, silver
+1,400 and gold 1,750 per difficulty point), a rank ladder from medal points, medal
+and promotion scenes, and NetBBS game events for promotions, first golds and
+career standings. Chapters are data, and a mission carries its own gravity, so a
+later season or another world is new entries rather than new machinery.
+
 Animations run at the existing 10 fps, obey host deadlines and consume their skip
 key. They never advance flight physics. Save a landing before celebrating it;
 unranked play and storage errors remain explicit. The eight-caller shipped

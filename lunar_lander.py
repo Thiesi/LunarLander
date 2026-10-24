@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from bisect import bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from functools import lru_cache
 import json
@@ -66,6 +66,10 @@ class Host:
     path: str | None = None
     timezone: str = "UTC"
     bbs: str = "NetBBS"
+    drop: str | None = None
+    event_types: tuple[str, ...] | None = None
+    title_max: int = 80
+    standings_rows: int = 10
 
     @property
     def ranked(self) -> bool:
@@ -102,6 +106,15 @@ class Host:
             node = data.get("node_id", "")
             if not isinstance(node, str) or len(node) > 256:
                 raise ValueError("invalid node_id")
+            # Game events (door API 5): present only while the SysOp has them on.
+            outbound, events = data.get("outbound"), None
+            if isinstance(outbound, dict) and isinstance(outbound.get("directory"), str) and outbound["directory"]:
+                events = outbound.get("events") if isinstance(outbound.get("events"), dict) else None
+
+            def bound(key: str, default: int) -> int:
+                value = (events or {}).get(key)
+                return min(value, default) if type(value) is int and value > 0 else default
+            types = (events or {}).get("types")
             # The node's display name, for "Return to ..."; brackets would read as hotkeys.
             name = data.get("node_name")
             bbs = plain(re.sub(r"[\[\]]", "", name), 24).strip() if isinstance(name, str) else ""
@@ -111,7 +124,10 @@ class Host:
                        handle=plain(data.get("handle", "Pilot")), node=node, user=user,
                        limit=limit, path=path,
                        timezone=data.get("timezone") if isinstance(data.get("timezone"), str) else "UTC",
-                       bbs=bbs or "NetBBS")
+                       bbs=bbs or "NetBBS",
+                       drop=str(Path(path).parent / outbound["directory"]) if events is not None else None,
+                       event_types=tuple(t for t in types if isinstance(t, str)) if isinstance(types, list) else None,
+                       title_max=bound("title_max", 80), standings_rows=bound("standings_rows", 10))
         except (OSError, ValueError, TypeError) as exc:
             raise DoorError(f"Cannot read NetBBS launch metadata: {exc}") from exc
 
@@ -270,6 +286,7 @@ class Flight:
     elapsed: float = 0.0
     status: str = "flying"
     reason: str = ""
+    gravity: float = GRAVITY
 
     def command(self, key: str):
         if key in ("a", "left"):
@@ -327,7 +344,7 @@ class Flight:
             power = burn / (FUEL_FLOW * h)
             acceleration = MAX_THRUST * power / (DRY_MASS + self.fuel - burn / 2)
             a = math.radians(self.angle)
-            ax, ay = acceleration * math.sin(a), acceleration * math.cos(a) - GRAVITY
+            ax, ay = acceleration * math.sin(a), acceleration * math.cos(a) - self.gravity
             self.x += self.vx * h + ax * h * h / 2
             self.y += self.vy * h + ay * h * h / 2
             self.vx += ax * h
@@ -366,17 +383,21 @@ class Mission:
     drift: float
     fuel: float
     seed: int = 0
+    sink: float = -6.0
+    relief: tuple[int, int] = (45, 115)
+    gravity: float = GRAVITY
 
     def launch(self) -> Flight:
         if self.difficulty == 0:
             return training()
         rng = random.Random(self.seed)
         pad = Pad(self.center - self.width / 2, self.center + self.width / 2, 35, self.name)
-        points = [(float(x), float(rng.randint(45, 115))) for x in range(0, 1001, 80)
+        points = [(float(x), float(rng.randint(*self.relief))) for x in range(0, 1001, 80)
                   if x < pad.left - 30 or x > pad.right + 30]
         points.extend(((pad.left, pad.height), (pad.right, pad.height), (1000.0, 80.0)))
         return Flight(Terrain(tuple(sorted(points)), pad), x=self.center + self.offset,
-                      y=self.altitude, vx=self.drift, vy=-6, fuel=self.fuel, initial_fuel=self.fuel)
+                      y=self.altitude, vx=self.drift, vy=self.sink, fuel=self.fuel, initial_fuel=self.fuel,
+                      gravity=self.gravity)
 
 
 def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
@@ -394,7 +415,88 @@ def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mis
         Mission("hadley", "HADLEY RILLE", "Approach the rille from the west. Arrest the drift.", 3, 530, 50, 270, -125, 7, 76, 55),
         Mission("farside", "FAR SIDE", "A fast eastern run toward a small, isolated pad.", 4, 780, 45, 310, -120, 12, 70, 66),
         Mission("polar", "POLAR APPROACH", "A narrow foothold and a lean tank. Fly precisely.", 4, 180, 45, 290, 140, -11, 65, 77),
+        Mission("serenitatis", "MARE SERENITATIS", "Glassy plains and a calm sky. Settle it softly.", 1, 620, 80, 220, -80, 5, 82, 88,
+                relief=(40, 80)),
+        Mission("imbrium", "MARE IMBRIUM", "A long glide across the Sea of Rains to a mid-size pad.", 2, 760, 70, 260, -200, 8, 84, 99,
+                relief=(40, 85)),
+        Mission("crisium", "MARE CRISIUM", "A walled sea. Drop in steeply between its rims.", 2, 400, 60, 300, 40, -3, 80, 111,
+                sink=-9, relief=(45, 120)),
+        Mission("descartes", "DESCARTES UPLANDS", "Broken uplands around a narrow shelf. Mind the ridges.", 2, 350, 55, 280, 120, -6, 78, 122,
+                relief=(60, 150)),
+        Mission("apennine", "APENNINE FRONT", "Skirt the mountain front and settle at its foot.", 3, 600, 50, 300, -150, 8, 74, 133,
+                relief=(60, 160)),
+        Mission("tsiolkovsky", "TSIOLKOVSKY", "A dark-floored far-side crater. Long, lean and precise.", 4, 450, 45, 320, 180, -9, 66, 144,
+                relief=(50, 140)),
+        Mission("shackleton", "SHACKLETON RIM", "A sliver of sunlit rim at the south pole. Barely room.", 5, 520, 45, 300, -90, 6, 64, 155,
+                sink=-8, relief=(60, 160)),
+        Mission("aitken", "AITKEN BASIN", "The Moon's deepest basin. A fast, steep entry.", 5, 820, 45, 340, -160, 10, 68, 166,
+                sink=-12, relief=(45, 130)),
     )
+
+
+@dataclass(frozen=True)
+class Chapter:
+    """A tab of the flight director: a name and its missions, by key ("daily" is
+    the day's challenge). A later campaign -- a season, or another world with
+    missions of its own gravity -- is more chapters, not new machinery."""
+    key: str
+    name: str
+    missions: tuple[str, ...]
+    ranked: bool = True  # counts toward career rank
+
+
+CHAPTERS = (
+    Chapter("maria", "MARIA", ("training", "tranquility", "serenitatis", "copernicus", "imbrium", "crisium")),
+    Chapter("highlands", "HIGHLANDS", ("ridgetop", "descartes", "hadley", "needle", "apennine")),
+    Chapter("frontier", "FRONTIER", ("farside", "polar", "tsiolkovsky", "shackleton", "aitken")),
+    Chapter("daily", "DAILY", ("daily",), ranked=False),
+)
+
+
+def chapter_missions(chapter: Chapter, catalog: tuple[Mission, ...]) -> tuple[Mission, ...]:
+    by_key = {mission.key: mission for mission in catalog}
+    daily = next((mission for mission in catalog if mission.key.startswith("daily-")), None)
+    return tuple(daily if key == "daily" else by_key[key] for key in chapter.missions
+                 if (daily if key == "daily" else by_key.get(key)) is not None)
+
+
+# Medals are read from a pilot's best score on a mission, never stored: the
+# thresholds are per difficulty point, so a harder mission asks the same
+# quality of landing. Any safe landing is bronze.
+MEDALS = (("GOLD", 1750), ("SILVER", 1400), ("BRONZE", 1000))
+MEDAL_POINTS = {"GOLD": 3, "SILVER": 2, "BRONZE": 1}
+RANKS = ((0, "CADET"), (3, "PILOT"), (8, "FLIGHT OFFICER"), (15, "LM PILOT"),
+         (23, "COMMANDER"), (32, "MISSION COMMANDER"), (45, "LUNAR ACE"))
+
+
+def medal(mission: Mission, score: int) -> str | None:
+    if not mission.difficulty or score <= 0:
+        return None
+    return next((name for name, threshold in MEDALS if score >= threshold * mission.difficulty), None)
+
+
+@dataclass(frozen=True)
+class Career:
+    points: int
+    rank: str
+    level: int
+    next_rank: str | None
+    next_at: int | None
+    landed: int
+    golds: int
+    total: int
+
+
+def career(bests: dict[str, int], catalog: tuple[Mission, ...]) -> Career:
+    """Rank from the medals on ranked chapters' missions: 3 for gold, 2 silver, 1 bronze."""
+    ranked = [mission for chapter in CHAPTERS if chapter.ranked
+              for mission in chapter_missions(chapter, catalog) if mission.difficulty]
+    medals = [medal(mission, bests.get(mission.key, 0)) for mission in ranked]
+    points = sum(MEDAL_POINTS.get(m, 0) for m in medals)
+    level = max(n for n, (needed, _) in enumerate(RANKS) if points >= needed)
+    upcoming = RANKS[level + 1] if level + 1 < len(RANKS) else None
+    return Career(points, RANKS[level][1], level, upcoming and upcoming[1], upcoming and upcoming[0],
+                  sum(1 for m in medals if m), medals.count("GOLD"), len(ranked))
 
 
 class DailyClock:
@@ -473,6 +575,21 @@ class Records:
             if self.db.in_transaction:
                 self.db.execute("ROLLBACK")
             raise
+
+    def bests(self, host: Host) -> dict[str, int]:
+        """This pilot's best score on every mission they have landed."""
+        if not host.ranked:
+            return {}
+        return dict(self.db.execute("SELECT mission, score FROM scores WHERE node=? AND user=?",
+                                    (host.node, host.user)).fetchall())
+
+    def roster(self, host: Host) -> dict[int, dict[str, int]]:
+        """Every pilot's bests on this node, by user id: the career standings."""
+        pilots: dict[int, dict[str, int]] = {}
+        for user, mission, score in self.db.execute("SELECT user, mission, score FROM scores WHERE node=?",
+                                                    (host.node,)):
+            pilots.setdefault(user, {})[mission] = score
+        return pilots
 
     def top(self, host: Host, mission: Mission) -> list[tuple[str, int]]:
         self.identify(host)
@@ -940,6 +1057,115 @@ def explosion(age: float, radius: float, seed: int = 0) -> dict:
     return sprite
 
 
+# Light, base and shadow of each medal's metal.
+MEDAL_COLORS = {"GOLD": ((255, 238, 160), (236, 180, 52), (140, 88, 18)),
+                "SILVER": ((252, 253, 255), (196, 204, 218), (100, 108, 126)),
+                "BRONZE": ((248, 194, 136), (200, 124, 52), (104, 56, 22))}
+_RIBBON = ((34, 52, 120), (34, 52, 120), (236, 236, 240), (196, 40, 52), (196, 40, 52), (236, 236, 240),
+           (34, 52, 120), (34, 52, 120))
+
+
+def medal_sprite(kind: str, radius: int, shine: float | None = None) -> dict:
+    """A struck medal on its ribbon, centred on the disc: metal lit from the
+    upper left, a bevelled rim, the lander raised in relief, and a band of
+    light (`shine`, -1.6..1.6 across the face) when it catches the sun."""
+    light, base, dark = MEDAL_COLORS[kind]
+    sprite = {}
+    emblem = LANDERS["medium" if radius >= 13 else "small"][0]
+    half = max(3, round(radius * .6))
+    for y in range(-radius - round(radius * .9) - 2, -radius + 2):
+        for x in range(-half, half + 1):
+            stripe = _RIBBON[min(len(_RIBBON) - 1, int((x + half) / (2 * half + 1) * len(_RIBBON)))]
+            sprite[(x, y)] = (scale(stripe, 1.1 if x < 0 else .85), "|")
+    for x in range(-half - 1, half + 2):
+        sprite[(x, -radius + 1)] = (dark, "=")
+    for y in range(-radius, radius + 1):
+        for x in range(-radius, radius + 1):
+            d = math.hypot(x, y) / (radius + .3)
+            if d > 1:
+                continue
+            nx, ny = x / radius, y / radius
+            toward = -(nx + ny) * .7071
+            if d > .84:
+                color = mix(dark, light, .5 - .45 * toward)
+            else:
+                color = mix(dark, light, .55 + .45 * toward)
+                if (x, y - 1) in emblem:
+                    color = mix(color, light, .6)
+                elif (x - 1, y - 2) in emblem:
+                    color = scale(color, .72)
+            if shine is not None:
+                band = abs((nx + ny) * .7071 - shine)
+                if band < .18:
+                    color = mix(color, (255, 255, 255), .7 * (1 - band / .18))
+            sprite[(x, y)] = (color, "O" if d > .84 else "o")
+    return sprite
+
+
+def sparkle(color) -> dict:
+    """A four-pointed glint."""
+    return {(0, 0): ((255, 255, 255), "*"), (-1, 0): (color, "-"), (1, 0): (color, "-"),
+            (0, -1): (color, "|"), (0, 1): (color, "|")}
+
+
+_SHELLS = ((255, 214, 90), (110, 230, 255), (255, 120, 200), (140, 255, 150), (255, 255, 255), (255, 150, 80))
+
+
+def fireworks(t: float, width: int, height: int, seed: int = 0) -> dict:
+    """Shells climbing on a spark trail, bursting into rings that fall under
+    lunar gravity and cool into the night. Positions in pixels of a
+    `width` x `height` sky; a pure function of `t`."""
+    sprite = {}
+    speed, gravity, life = height * .24, height * .12, 1.4
+    for i in range(7):
+        start = .15 + i * .5
+        x0 = round(width * (.12 + .76 * _hash(i, 1, seed)))
+        top, ground = height * (.1 + .2 * _hash(i, 2, seed)), height * .62
+        color = _SHELLS[(i + seed) % len(_SHELLS)]
+        rise = (t - start) / .55
+        if 0 <= rise < 1:
+            y = ground - (ground - top) * (1 - (1 - rise) ** 2)
+            for n, level in enumerate((1, .7, .45, .25)):
+                sprite[(x0, round(y + n))] = (heat(level), "'")
+            continue
+        age = t - start - .55
+        if not 0 <= age <= life:
+            continue
+        for k in range(28):
+            angle = 2 * math.pi * k / 28 + _hash(i, 3, seed)
+            reach = speed * (.75 + .5 * _hash(i, k, seed + 4))
+            for lag, fade in ((0, 0), (.08, .35)):
+                a = max(0.0, age - lag)
+                px = round(x0 + math.cos(angle) * reach * a)
+                py = round(top + math.sin(angle) * reach * a + .5 * gravity * a * a)
+                cool = round(min(1.0, (a / life) ** 1.4 + fade) * 5) / 5
+                tint = (255, 255, 255) if a < .12 else mix(color, (20, 20, 40), cool)
+                if 0 <= px < width and 0 <= py < height and (px, py) not in sprite:
+                    sprite[(px, py)] = (tint, "*" if a < .5 else ".")
+    return sprite
+
+
+def insignia(level: int, half: int, shown: float = 1.0) -> dict:
+    """Rank chevrons, one per rank above cadet, stacked from the bottom; a
+    star above them for the top rank. `shown` (0..1) reveals them in order."""
+    sprite = {}
+    count = min(level, 6)
+    for j in range(count):
+        if j >= shown * count:
+            break
+        fresh = j + 1 > shown * count - .5
+        for dx in range(-half, half + 1):
+            top = -3 * j - round((half - abs(dx)) * .5)
+            for dy, tone in ((0, (255, 236, 150)), (1, (226, 164, 44))):
+                sprite[(dx, top + dy)] = ((255, 255, 255) if fresh else tone, "^")
+    if level >= len(RANKS) - 1 and shown >= 1:
+        apex = -3 * count - round(half * .5) - 4
+        for dx, dy in ((0, -2), (-1, -1), (0, -1), (1, -1), (-2, 0), (-1, 0), (0, 0), (1, 0), (2, 0),
+                       (-1, 1), (1, 1), (-2, 2), (2, 2)):
+            sprite[(dx, apex + dy)] = ((255, 248, 200), "*")
+    return sprite
+
+
 def earth_sprite(radius: int) -> dict:
     """The distant Earth: oceans, continents and cloud on a lit sphere, a thin
     blue limb, and a faint halo on its sunward side (alpha in the glyph slot)."""
@@ -1169,7 +1395,24 @@ def draw_stars(canvas: Canvas, stars, frame: int, unicode: bool, open_sky, top: 
         canvas.cells[y][col] = (STAR_GLYPHS[kind][0 if unicode else 1], color, bg)
 
 
-SCENE_SECONDS = {"splash": 5.0, "launch": 1.6, "landing": 2.6, "crash": 2.4}
+@dataclass(frozen=True)
+class Deck:
+    """What the flight director shows beyond the chosen mission: the chapter
+    tab, the pilot's bests, whether they are kept, and the last award."""
+    chapter: int = 0
+    bests: dict = field(default_factory=dict)
+    saved: bool = False
+    award: Award | None = None
+
+
+def medal_parts(kind: str | None, unicode: bool) -> list[tuple[str, tuple]]:
+    """A medal as a colored mark: a disc, or its initial in ASCII glyphs."""
+    if kind is None:
+        return [("·" if unicode else ".", (60, 72, 104))]
+    return [("●" if unicode else kind[0], MEDAL_COLORS[kind][1])]
+
+
+SCENE_SECONDS = {"splash": 5.0, "launch": 1.6, "landing": 2.6, "crash": 2.4, "medal": 3.2, "promotion": 4.4}
 SCENE_MAX = (132, 50)
 SPLASH_PROMPT = "press any key to begin"
 
@@ -1314,10 +1557,58 @@ class Display:
             if t >= 3.5:
                 chip = [("PILOT ", (179, 155, 125)), (self.host.handle, (232, 240, 255)),
                         ("  ·  " if unicode else "  -  ", (70, 82, 120)),
-                        ("9 MISSIONS + DAILY", (179, 155, 125))]
+                        (f"{career({}, missions()).total} MISSIONS + DAILY", (179, 155, 125))]
                 texts.append((text_row + 2, mx, chip))
             if t >= SCENE_SECONDS["splash"]:
                 texts.append((rows - 1, max(0, cols - len(SPLASH_PROMPT) - 2), [(SPLASH_PROMPT, rgb(5))]))
+        elif kind in ("medal", "promotion"):
+            award = self.deck.award or Award(missions()[1], 1800, "GOLD", "GOLD", True,
+                                             Career(3, "PILOT", 1, "FLIGHT OFFICER", 8, 1, 1, 15), "PILOT")
+            beacon_on = True
+            if kind == "medal":
+                kind_name = award.medal or "BRONZE"
+                light, base, _ = MEDAL_COLORS[kind_name]
+                # The landscape steps back; the medal fades in, then catches the light.
+                pixels[:] = [list(row) for row in _dimmed(cols, rows)]
+                radius = max(7, min(14, round(h * .2)))
+                cx, cy = w // 2, 6 + round(radius * .9) + radius
+                passes = 2 if kind_name == "GOLD" else 1
+                sweep = _span(t, 1.0, 1.0 + .7 * passes) * passes
+                shine = (sweep % 1) * 3.2 - 1.6 if 0 < sweep < passes else None
+                appear = round(_ease(t / .8) * 5) / 5
+                sprite = {point: (mix(pixels[cy + point[1]][cx + point[0]] if 0 <= cy + point[1] < h
+                                      and 0 <= cx + point[0] < w else (0, 0, 0), color, appear), glyph)
+                          for point, (color, glyph) in medal_sprite(kind_name, radius, shine).items()}
+                sprites.append((sprite, cx, cy))
+                glints = {"GOLD": 6, "SILVER": 3}.get(kind_name, 0)
+                for n in range(glints if t > 1.4 else 0):
+                    if (self.frame + n * 3) % 9 < 4:
+                        angle = 2 * math.pi * _hash(n, 1, 7)
+                        reach = radius * (1.2 + .3 * _hash(n, 2, 7))
+                        sprites.append((sparkle(light), cx + round(math.cos(angle) * reach),
+                                        cy + round(math.sin(angle) * reach)))
+                spaced = "  ".join(f"{kind_name} MEDAL")
+                texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, light, base)))
+                caption = f"{award.mission.name.title()}  /  {award.score} points"
+                texts.append((rows - 5, max(1, (cols - len(caption)) // 2), [(caption, rgb(7))]))
+                verdict = ("NEW BEST" if award.improved else f"Your best here stays {award.best}") + \
+                    ("" if self.deck.saved else " (this session)")
+                texts.append((rows - 4, max(1, (cols - len(verdict)) // 2), [(verdict, light if award.improved else rgb(9))]))
+            else:
+                ladder = award.career
+                sprites.append((fireworks(t, w, h, ladder.level), 0, 0))
+                shown = _span(t, 1.0, 1.0 + .15 * max(1, ladder.level))
+                if shown > 0:
+                    sprites.append((insignia(ladder.level, max(6, w // 11), shown), w // 2, round(h * .55)))
+                spaced = "  ".join("PROMOTED")
+                texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, (255, 244, 214), (232, 160, 58))))
+                rank = " ".join(award.promoted or ladder.rank)
+                texts.append((3, max(1, (cols - len(rank)) // 2), [(rank, (255, 240, 200))]))
+                caption = f"{ladder.points} medal points" + (f"  /  next: {ladder.next_rank} at {ladder.next_at}"
+                                                            if ladder.next_rank else "  /  every mission gold")
+                texts.append((rows - 4, max(1, (cols - len(caption)) // 2), [(caption, rgb(7))]))
+            hint = "[SPACE] Continue   " + self.back
+            texts.append((rows - 2, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
         else:
             title = {"launch": "GO FOR DESCENT", "landing": "CONTACT LIGHT", "crash": "SIGNAL LOST"}[kind]
             subtitle = {"launch": "Attitude control online / descent engine armed",
@@ -1399,8 +1690,10 @@ class Display:
     def draw(self, flight: Flight, mode: str = "flying", remaining: float | None = None,
              slow: bool = False, mission: Mission | None = None,
              standings: list | None = None, record_note: str = "", scene_age: float = 0,
-             clock_note: str = "", catalog: tuple | None = None) -> Canvas:
+             clock_note: str = "", catalog: tuple | None = None, deck: Deck | None = None) -> Canvas:
         mission = mission or missions()[0]
+        self.deck = deck or Deck()
+        self.catalog = catalog or missions()
         self.frame += 1
         c = Canvas(self.host.width, self.host.height)
         if self.host.width < 80 or self.host.height < 24:
@@ -1446,12 +1739,22 @@ class Display:
             lines = ["CONTACT LIGHT / LANDED" if landed else "SIGNAL LOST / LANDER DOWN",
                      "", flight.reason, "",
                      f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
-                     f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", "",
-                     record_note or "Training flight / unranked", "",
-                     "[R] Retry    [M] Mission briefing", self.back]
+                     f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", ""]
+            award = self.deck.award
+            if landed and award is not None and award.mission.key == mission.key:
+                # The score itself is in the record note below.
+                lines.append(f"{award.medal} MEDAL" + ("" if award.improved or award.medal == award.best
+                                                       else f" / your best here stays {award.best}"))
+                ladder = award.career
+                lines.append(f"PROMOTED TO {award.promoted}" if award.promoted else
+                             f"Rank {ladder.rank}: {ladder.points} medal points"
+                             + (f", {ladder.next_at - ladder.points} to {ladder.next_rank}" if ladder.next_rank else ""))
+            lines += [record_note or "Training flight / unranked", "",
+                      "[R] Retry    [M] Mission briefing", self.back]
         elif mode == "scores":
             lines = ["BEST PILOTS / " + mission.name, ""]
-            lines += [f"{i:2}. {plain(name, 30):30} {score:6} pts" for i, (name, score) in enumerate(standings or [], 1)]
+            lines += [f"{i:2}. {plain(name, 28):28} {score:6} pts  {medal(mission, score) or ''}"
+                      for i, (name, score) in enumerate(standings or [], 1)]
             if not standings:
                 lines.append(record_note or "No landings recorded for this mission yet.")
             lines += ["", "[B] or [ESC] Back to mission briefing"]
@@ -1463,44 +1766,78 @@ class Display:
         return c
 
     def menu(self, c: Canvas, mission: Mission, catalog: tuple, record_note: str, clock_note: str):
-        """The flight director: every mission on a fixed grid, the chosen one briefed."""
-        unicode = self.host.unicode
+        """The flight director: chapter tabs, the pilot's rank, the chapter's
+        missions on a fixed grid with difficulty and medal, the chosen one briefed."""
+        unicode, deck = self.host.unicode, self.deck
+        updown, sideways = self.arrows[1], self.arrows[0]
         box_w, box_h = min(76, c.width - 2), 20
         x0, y0 = (c.width - box_w) // 2, max(1, (c.height - box_h) // 2)
         c.frame(x0, y0, box_w, box_h, "LUNAR LANDER / FLIGHT DIRECTOR", unicode)
         lx, rx = x0 + 3, x0 + 37
         rw = box_w - (rx - x0) - 3
-        c.text(lx, y0 + 2, "MISSIONS", 9, PANEL)
-        c.text(rx, y0 + 2, "BRIEFING", 9, PANEL)
+        rule = ("─" if unicode else "-") * (box_w - 2)
+        tab_x = lx - 1
+        for n, chapter in enumerate(CHAPTERS):
+            chosen = n == deck.chapter
+            label = f" {chapter.name} "
+            c.text(tab_x, y0 + 1, label, (255, 240, 200) if chosen else 9, HIGHLIGHT if chosen else PANEL)
+            tab_x += len(label) + 1
+        # The career: rank, progress to the next and the tally.
+        ladder = career(deck.bests, catalog)
+        floor = RANKS[ladder.level][0]
+        fill = 1.0 if ladder.next_at is None else (ladder.points - floor) / (ladder.next_at - floor)
+        bar = [(("━" if unicode else "=") if n < round(fill * 8) else ("─" if unicode else "-"),
+                (236, 180, 52) if n < round(fill * 8) else (52, 64, 98)) for n in range(8)]
+        points = f" {ladder.points}/{ladder.next_at} pts" if ladder.next_at else f" {ladder.points} pts"
+        c.rich(lx, y0 + 2, [("RANK ", 9), (ladder.rank, 5), (" ", 9), *bar, (points, 6)], PANEL)
+        tally = [(f"{ladder.landed}/{ladder.total}", 6), (" landed  ", 9), (str(ladder.golds), 6),
+                 (" gold", 9)] + ([("  session only", 12)] if not deck.saved else [])
+        c.rich(x0 + box_w - 3 - sum(_cells(t) for t, _ in tally), y0 + 2, tally, PANEL)
+        c.text(x0 + 1, y0 + 3, rule, EDGE, PANEL)
         pip, empty = ("■", "·") if unicode else ("#", ".")
-        for n, entry in enumerate(catalog):
-            row, chosen = y0 + 3 + n, entry.key == mission.key
+        for n, entry in enumerate(chapter_missions(CHAPTERS[deck.chapter], catalog)):
+            row, chosen = y0 + 4 + n, entry.key == mission.key
             bg = HIGHLIGHT if chosen else PANEL
             if chosen:
-                c.fill(lx - 1, row, 32, 1, bg)
-            pips = [("free", 9)] if not entry.difficulty else \
-                [(pip * entry.difficulty, 8 if entry.difficulty >= 4 else 5), (empty * (4 - entry.difficulty), 9)]
+                c.fill(lx - 1, row, 33, 1, bg)
+                c.text(lx - 1, row, "►" if unicode else ">", 5, bg)
             c.rich(lx, row, [("[", 9), (str(n + 1), 5), ("] ", 9),
                              (plain(entry.name, 19), (255, 240, 200) if chosen else 7)], bg)
-            c.rich(lx + 25, row, pips, bg)
-            if chosen:
-                c.text(lx - 1, row, "►" if unicode else ">", 5, bg)
-        c.text(rx, y0 + 3, plain(mission.name, rw), 5, PANEL)
+            if entry.difficulty:
+                c.rich(lx + 24, row, [(pip * entry.difficulty, 8 if entry.difficulty >= 4 else 5),
+                                      (empty * (5 - entry.difficulty), 9)], bg)
+                c.rich(lx + 30, row, medal_parts(medal(entry, deck.bests.get(entry.key, 0)), unicode), bg)
+            else:
+                c.text(lx + 24, row, "free", 9, bg)
+        # The briefing.
+        c.text(rx, y0 + 4, plain(mission.name, rw), 5, PANEL)
         for n, line in enumerate(textwrap.wrap(mission.description, rw)[:3]):
             c.text(rx, y0 + 5 + n, line, 7, PANEL)
         stats = (("PAD", f"{mission.width:.0f} m"), ("FUEL", f"{mission.fuel:.0f} kg"),
                  ("START", f"{mission.altitude:.0f} m"), ("DRIFT", f"{mission.drift:+.0f} m/s"))
         for n, (label, value) in enumerate(stats):
-            c.rich(rx + (n % 2) * 18, y0 + 9 + n // 2, [(label + " ", 9), (value, 6)], PANEL)
-        for n, line in enumerate(textwrap.wrap(record_note or ("UNRANKED TRAINING" if not mission.difficulty
-                                                               else "RANKED FLIGHT"), rw)[:2]):
-            c.text(rx, y0 + 11 + n, line, 12, PANEL)
-        c.text(x0 + 1, y0 + 13, ("─" if unicode else "-") * (box_w - 2), EDGE, PANEL)
-        c.annotated(lx, y0 + 14, f"[W/S {self.arrows[1]}] Thrust  [A/D {self.arrows[0]}] Tilt  [0-9] Power  "
-                    "[SPACE] Cut  [X] Level", PANEL, box_w - 6)
-        c.annotated(lx, y0 + 15, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
-        c.text(lx, y0 + 16, plain(clock_note, box_w - 6), 9, PANEL)
-        c.annotated(lx, y0 + 17, "[ENTER] Launch  [B] Best pilots  [?] Manual", PANEL, box_w - 6)
+            c.rich(rx + (n % 2) * 18, y0 + 8 + n // 2, [(label + " ", 9), (value, 6)], PANEL)
+        daily = CHAPTERS[deck.chapter].key == "daily"
+        if mission.difficulty:
+            best = deck.bests.get(mission.key, 0)
+            earned = medal(mission, best)
+            c.rich(rx, y0 + 10, [("TODAY " if daily else "BEST ", 9)] +
+                   ([(f"{best} pts ", 6), (earned, MEDAL_COLORS[earned][1])] if earned else [("not landed yet", 9)]),
+                   PANEL)
+            c.rich(rx, y0 + 11, [("GOLD ", MEDAL_COLORS["GOLD"][1]), (f"{1750 * mission.difficulty}  ", 6),
+                                 ("SILVER ", MEDAL_COLORS["SILVER"][1]), (f"{1400 * mission.difficulty}", 6)], PANEL)
+        else:
+            c.text(rx, y0 + 10, "Practice: no medals here", 9, PANEL)
+        notes = textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw) if daily else \
+            textwrap.wrap(record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT"), rw)
+        for n, line in enumerate(notes[:2]):
+            c.text(rx, y0 + 12 + n, plain(line, rw), 12, PANEL)
+        c.text(x0 + 1, y0 + 14, rule, EDGE, PANEL)
+        c.annotated(lx, y0 + 15, f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual",
+                    PANEL, box_w - 6)
+        c.annotated(lx, y0 + 16, f"In flight: [W/S {updown}] Thrust  [A/D {sideways}] Tilt  [0-9] Power  [SPACE] Cut",
+                    PANEL, box_w - 6)
+        c.annotated(lx, y0 + 17, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
         c.annotated(lx, y0 + 18, self.back, PANEL, box_w - 6)
 
     def landscape(self, ground: Terrain, left: float, metres: float, top: float, width: int,
@@ -1660,7 +1997,8 @@ class Display:
         c.rich(2, 0, _gradient("L U N A R   L A N D E R", (255, 240, 200), (232, 160, 58)), PANEL)
         flight_label = [("FLIGHT ", 9), (plain(mission.name, 24), 5)]
         c.rich(width - 2 - sum(_cells(t) for t, _ in flight_label), 0, flight_label, PANEL)
-        c.rich(2, 1, [("PILOT ", 9), (self.host.handle, 7)], PANEL, width // 2)
+        c.rich(2, 1, [("PILOT ", 9), (self.host.handle, 7), ("  ", 9),
+                      (career(self.deck.bests, self.catalog).rank, 5)], PANEL, width // 2)
         view = [("VIEW ", 9), (f"{span:4.0f} m", 6), ("   T+", 9), (f"{flight.elapsed:5.1f}s", 6)]
         c.rich(width - 2 - sum(_cells(t) for t, _ in view), 1, view, PANEL)
         # Instruments: four gauges, the throttle, the touchdown limits and the keys.
@@ -1714,8 +2052,87 @@ class Display:
         c.annotated(2, row + 6, "[P] Pause  [?] Flight manual  " + self.back, PANEL)
 
 
+@lru_cache(maxsize=2)
+def _dimmed(width: int, rows: int) -> tuple:
+    """The stage pushed back behind a medal."""
+    return tuple(tuple(scale(px, .4) for px in row) for row in stage(width, rows).pixels)
+
+
 def pad_half(st: Stage) -> int:
     return (st.pad[1] - st.pad[0]) // 2
+
+
+@dataclass(frozen=True)
+class Award:
+    """What a safe landing earned: this flight's medal, the pilot's best on the
+    mission afterwards, and a promotion if the career moved up a rank."""
+    mission: Mission
+    score: int
+    medal: str | None
+    best: str | None
+    improved: bool
+    career: Career
+    promoted: str | None
+
+
+class Announcer:
+    """NetBBS game events (door API 5): promotions as `rank` events, a first gold
+    on a mission as an `achievement`, and the node's career standings for
+    `!top`. Requests go to the drop directory NetBBS named for this launch, are
+    written whole and renamed into place, and only ever report what was earned
+    live and saved. Reporting is a courtesy: a failed write never stops play."""
+    EVENT_MAX, STANDINGS_MAX = 2048, 8192
+
+    def __init__(self, host: Host, records: Records):
+        self.host, self.records = host, records
+        self.directory = Path(host.drop)
+        self.sequence = 0
+        self.sent: list | None = None
+
+    @classmethod
+    def for_launch(cls, host: Host, records: Records | None) -> Announcer | None:
+        return cls(host, records) if host.drop and host.ranked and records is not None else None
+
+    def landed(self, award: Award, catalog: tuple[Mission, ...]):
+        if award.promoted:
+            self.event("rank", award.promoted.title())
+        if award.medal == "GOLD" and award.improved:
+            self.event("achievement", "Gold landing: " + award.mission.name.title())
+        self.standings(catalog)
+
+    def event(self, kind: str, title: str):
+        if self.host.event_types is None or kind in self.host.event_types:
+            self.write({"event": {"type": kind, "user_id": self.host.user,
+                                  "title": plain(title, self.host.title_max)}}, self.EVENT_MAX)
+
+    def standings(self, catalog: tuple[Mission, ...]):
+        """The node's top pilots by medal points, sent when the order changed."""
+        try:
+            pilots = self.records.roster(self.host)
+        except sqlite3.Error:
+            return
+        careers = [(career(bests, catalog), user) for user, bests in pilots.items()]
+        careers = sorted(((c, u) for c, u in careers if c.points), key=lambda item: (-item[0].points, -item[0].golds, item[1]))
+        rows = [{"user_id": user, "value": f"{c.points} medal pts", "label": c.rank.title()}
+                for c, user in careers[:self.host.standings_rows]]
+        if rows != self.sent and (rows or self.sent is not None):
+            if self.write({"standings": {"title": "Career Roster", "rows": rows}}, self.STANDINGS_MAX):
+                self.sent = rows
+
+    def write(self, request: dict, limit: int) -> bool:
+        data = json.dumps(request, ensure_ascii=False).encode("utf-8")
+        if len(data) > limit:
+            return False
+        # NetBBS reads only names ending in .json, in name order: zero-padded.
+        self.sequence += 1
+        name = f"lunar-lander-{self.sequence:06d}"
+        try:
+            partial = self.directory / (name + ".part")
+            partial.write_bytes(data)
+            partial.replace(self.directory / (name + ".json"))
+        except OSError:
+            return False
+        return True
 
 
 class Game:
@@ -1725,7 +2142,8 @@ class Game:
         self.clock = clock or DailyClock(self.host.timezone)
         self.day = self.clock.day()
         self.missions = missions(self.day, self.clock.date_format)
-        self.selected = 0
+        self.chapter = 0
+        self.cursor = [0] * len(CHAPTERS)
         self.mission = self.missions[0]
         self.flight = self.mission.launch()
         self.mode = "splash" if splash else "menu"
@@ -1738,15 +2156,38 @@ class Game:
         self.record_note = ""
         self.before_quit = "flying"
         self.leaving = False
+        # Best scores by mission key: from the records for a ranked pilot, for
+        # this session alone otherwise, so a guest still sees medals earned.
+        self.bests: dict[str, int] = {}
+        if self.records is not None and self.host.ranked:
+            try:
+                self.bests = self.records.bests(self.host)
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+        self.award: Award | None = None
+        self.queue: list[str] = []
+        self.announcer: Announcer | None = None
+
+    def shelf(self) -> tuple[Mission, ...]:
+        """The missions on the selected chapter's tab."""
+        return chapter_missions(CHAPTERS[self.chapter], self.missions)
+
+    def select(self):
+        shelf = self.shelf()
+        self.cursor[self.chapter] %= len(shelf)
+        self.mission = shelf[self.cursor[self.chapter]]
+        self.flight = self.mission.launch()
+        self.record_note = self.ranking_note()
+
+    def career(self) -> Career:
+        return career(self.bests, self.missions)
 
     def refresh_daily(self):
         day = self.clock.day()
         if day != self.day:
             self.day = day
             self.missions = missions(day, self.clock.date_format)
-            self.mission = self.missions[self.selected]
-            self.flight = self.mission.launch()
-            self.record_note = self.ranking_note()
+            self.select()
 
     def launch(self):
         self.refresh_daily()
@@ -1756,7 +2197,11 @@ class Game:
         self.record_note = self.ranking_note()
 
     def finish_scene(self):
-        self.mode = {"splash": "menu", "launch": "flying", "landing": "debrief", "crash": "debrief"}[self.mode]
+        if self.mode in ("splash", "launch"):
+            self.mode = "menu" if self.mode == "splash" else "flying"
+        else:
+            # After touchdown: the medal, then a promotion, then the debrief.
+            self.mode = self.queue.pop(0) if self.queue else "debrief"
         self.scene_age = self.accumulator = 0
 
     def ranking_note(self) -> str:
@@ -1795,12 +2240,19 @@ class Game:
         if self.mode == "menu" and key == "enter":
             self.launch()
             return True
-        if self.mode == "menu" and key in tuple("123456789"):
+        if self.mode == "menu" and key in ("up", "down", "w", "s", "left", "right", "a", "d", *"123456789"):
+            # Up/down (W/S) pick a mission, left/right (A/D) a chapter, digits jump.
             self.refresh_daily()
-            self.selected = int(key) - 1
-            self.mission = self.missions[self.selected]
-            self.flight = self.mission.launch()
-            self.record_note = self.ranking_note()
+            if key in ("left", "right", "a", "d"):
+                self.chapter = (self.chapter + (-1 if key in ("left", "a") else 1)) % len(CHAPTERS)
+            elif key in ("up", "down", "w", "s"):
+                step = -1 if key in ("up", "w") else 1
+                self.cursor[self.chapter] = (self.cursor[self.chapter] + step) % len(self.shelf())
+            elif int(key) <= len(self.shelf()):
+                self.cursor[self.chapter] = int(key) - 1
+            else:
+                return False
+            self.select()
             return True
         if self.mode == "menu" and key == "b":
             self.standings = []
@@ -1851,16 +2303,38 @@ class Game:
             self.flight.step()
             self.accumulator -= DT
             if self.flight.status != "flying":
+                saved = False
+                self.award, self.queue = None, []
                 if self.flight.status == "landed" and self.mission.difficulty and self.records and self.host.ranked:
                     try:
                         best = self.records.save(self.host, self.mission, self.flight)
+                        saved = True
                         self.record_note = f"{self.flight.score(self.mission.difficulty)} points / " + ("NEW PERSONAL BEST" if best else "personal best retained")
                     except sqlite3.Error as exc:
                         self.record_note = "Landing not saved: storage error. Ask your SysOp."
                         print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+                if self.flight.status == "landed" and self.mission.difficulty:
+                    self.award = self.reward()
+                    self.queue = ["medal"] * bool(self.award.medal) + ["promotion"] * bool(self.award.promoted)
+                    if saved and self.announcer is not None:
+                        self.announcer.landed(self.award, self.missions)
                 self.mode = ("landing" if self.flight.status == "landed" else "crash") if self.scenes else "debrief"
+                if not self.scenes:
+                    self.queue = []
                 self.accumulator = self.scene_age = 0
                 break
+
+    def reward(self) -> Award:
+        """The medal and any promotion this landing earned. Called after the save,
+        so a celebration never shows what the records do not hold."""
+        mission, score = self.mission, self.flight.score(self.mission.difficulty)
+        before, previous = self.career(), medal(mission, self.bests.get(mission.key, 0))
+        self.bests[mission.key] = max(score, self.bests.get(mission.key, 0))
+        after = self.career()
+        earned, best = medal(mission, score), medal(mission, self.bests[mission.key])
+        order = [None, "BRONZE", "SILVER", "GOLD"]
+        return Award(mission, score, earned, best, order.index(best) > order.index(previous), after,
+                     after.rank if after.level > before.level else None)
 
 
 class CpuBudget:
@@ -1933,6 +2407,9 @@ def run(host: Host, started: float) -> int:
                 splash=os.environ.get("DOOR_LL_SPLASH") != "0" and os.environ.get("DOOR_SPLASH", "").strip().lower()
                 not in ("0", "off", "no", "false"))
     game.record_note = game.ranking_note()
+    game.announcer = Announcer.for_launch(host, records)
+    if game.announcer is not None:
+        game.announcer.standings(game.missions)
     next_check = 0.0
     next_frame = 0.0
     last_tick = time.monotonic()
@@ -1971,7 +2448,8 @@ def run(host: Host, started: float) -> int:
                     frame = display.draw(game.flight, game.mode, remaining, game.slow,
                                          game.mission, game.standings, game.record_note, game.scene_age,
                                          clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30),
-                                         game.missions)
+                                         game.missions, Deck(game.chapter, game.bests,
+                                                             game.records is not None and host.ranked, game.award))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
