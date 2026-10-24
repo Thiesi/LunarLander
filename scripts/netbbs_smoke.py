@@ -139,6 +139,8 @@ async def check(root, captures, width, height, scenario):
                     caller.send("r")
                     await asyncio.sleep(.3)
                     assert "LANDER DOWN" not in "\n".join(caller.screen.text_rows())
+                    # The retry's ignition scene plays first; Q there would leave at once.
+                    await caller.until("ALTITUDE", task)
                 elif scenario == "resize":
                     caller.resize(70, 20)
                     await caller.until("Resize to 80x24", task)
@@ -163,7 +165,17 @@ async def check(root, captures, width, height, scenario):
                     results = await asyncio.wait_for(asyncio.gather(*(child for _, child in others)), 8)
                     assert all(r.reason == "exited" for r in results), results
                     print(f"PASS {profile.max_sessions} distinct simultaneous callers", flush=True)
+                # Q mid-flight asks before abandoning the attempt.
                 caller.send("q")
+                await caller.until("Abandon this flight", task)
+                if scenario == "play":
+                    caller.send("n")
+                    await caller.until("ALTITUDE", task)
+                    await asyncio.sleep(.2)
+                    assert "Abandon this flight" not in "\n".join(caller.screen.text_rows())
+                    caller.send("q")
+                    await caller.until("Abandon this flight", task)
+                caller.send("y")
                 result = await asyncio.wait_for(task, 8)
                 assert result.reason == "exited" and result.exit_code == 0, result
                 assert b"\x1b[?25h" in caller.output

@@ -12,7 +12,10 @@ No packages are required. Local play has no NetBBS account and is unranked.
 Choose a mission with 1–9, then Enter. A/D or left/right tilt; W/S or up/down
 adjust throttle. The setting stays put when you release the key. Digits select
 power from 0 (off) to 9 (full); Space cuts thrust and X levels the craft.
-P pauses; ? opens the manual; Q returns to the BBS.
+P pauses; ? opens the manual. Q returns to the BBS, which the screens name using
+NetBBS's `node_name` (or "NetBBS" when it is absent). During a flight, or while
+paused, Q first asks whether to abandon the attempt; Y leaves and N or Esc carries
+on, with the simulation stopped meanwhile. Ctrl-C and Ctrl-D leave at once.
 
 Start with training. Burn early, tilt against lateral drift, then straighten out
 over the cyan pad. At contact, both feet must be inside the pad, vertical speed

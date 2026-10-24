@@ -65,6 +65,7 @@ class Host:
     limit: float | None = None
     path: str | None = None
     timezone: str = "UTC"
+    bbs: str = "NetBBS"
 
     @property
     def ranked(self) -> bool:
@@ -101,12 +102,16 @@ class Host:
             node = data.get("node_id", "")
             if not isinstance(node, str) or len(node) > 256:
                 raise ValueError("invalid node_id")
+            # The node's display name, for "Return to ..."; brackets would read as hotkeys.
+            name = data.get("node_name")
+            bbs = plain(re.sub(r"[\[\]]", "", name), 24).strip() if isinstance(name, str) else ""
             return cls(*geometry, color=data.get("color_depth") if data.get("color_depth") in
                        ("16", "256", "truecolor") else "16",
                        unicode=data.get("unicode_style") is True,
                        handle=plain(data.get("handle", "Pilot")), node=node, user=user,
                        limit=limit, path=path,
-                       timezone=data.get("timezone") if isinstance(data.get("timezone"), str) else "UTC")
+                       timezone=data.get("timezone") if isinstance(data.get("timezone"), str) else "UTC",
+                       bbs=bbs or "NetBBS")
         except (OSError, ValueError, TypeError) as exc:
             raise DoorError(f"Cannot read NetBBS launch metadata: {exc}") from exc
 
@@ -128,7 +133,7 @@ class Keys:
             if first != 27:
                 del self.buffer[0]
                 if first in (3, 4):
-                    result.append("q")
+                    result.append("abort")
                 elif first in (10, 13):
                     result.append("enter")
                 elif 32 <= first < 127:
@@ -1186,6 +1191,9 @@ def _gradient(text: str, start, end) -> list[tuple[str, tuple]]:
 class Display:
     def __init__(self, host: Host):
         self.host = host
+        # The cursor keys work as well as the letters; say so, in glyphs the host can show.
+        self.arrows = ("←→", "↑↓") if host.unicode else ("<>", "^v")
+        self.back = "[Q] Return to " + host.bbs
         self.previous: list | None = None
         self.camera: tuple[float, float] | None = None
         self.frame = 0
@@ -1355,7 +1363,7 @@ class Display:
             colors = ((255, 150, 120), rgb(8)) if kind == "crash" else ((255, 244, 214), (232, 160, 58))
             texts.append((2, max(1, (cols - len(spaced)) // 2), _gradient(spaced, *colors)))
             texts.append((4, max(1, (cols - len(subtitle)) // 2), [(subtitle, rgb(7))]))
-            hint = "[SPACE] Skip scene   [Q] Quit"
+            hint = "[SPACE] Skip scene   " + self.back
             texts.append((rows - 2, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
 
         # Beacons at the pad's corners: masts with cyan lamps.
@@ -1409,12 +1417,19 @@ class Display:
             return c
         lines, accent = None, 5
         if mode == "paused":
-            lines = ["FLIGHT PAUSED", "", "[P] Resume flight     [?] Manual     [Q] Return",
+            lines = ["FLIGHT PAUSED", "", "[P] Resume flight   [?] Manual", self.back, "",
                      "The NetBBS session timer continues while paused."]
+        elif mode == "confirm":
+            accent = 8
+            lines = ["RETURN TO " + self.host.bbs.upper(), "",
+                     "Abandon this flight and return to " + self.host.bbs + "?",
+                     "This attempt will not be recorded.", "",
+                     "[Y] Yes, return     [N] Keep flying"]
         elif mode == "help":
             lines = ["FLIGHT MANUAL / A LITTLE THRUST GOES A LONG WAY", "",
-                     "[W/S] Throttle +/-10%. Digits: [0] off to [9] full.",
-                     "[A/D] Tilt +/-10 degrees. [X] Upright. [SPACE] Cut.",
+                     f"[W/S {self.arrows[1]}] Throttle +/-10%. Digits: [0] off to [9] full.",
+                     f"[A/D {self.arrows[0]}] Tilt +/-10 degrees. [X] Upright. [SPACE] Cut.",
+                     "Need to brake hard? [9] is full throttle at once.",
                      "Controls stay set; you never need to hold two keys.", "",
                      "Burn early to slow descent. Tilt against your drift.",
                      "Watch VERTICAL: negative means falling toward the Moon.",
@@ -1424,7 +1439,7 @@ class Display:
                      "  + 250 x (1-|V|/3) + 250 x (1-|H|/2)).",
                      "Best per mission; tied scores rank earliest first.",
                      "Training is unranked. Disconnect forfeits the flight.", "",
-                     "[?] or [ESC] Back    [Q] Return to NetBBS"]
+                     "[?] or [ESC] Back    " + self.back]
         elif mode == "debrief":
             landed = flight.status == "landed"
             accent = 6 if landed else 8
@@ -1433,7 +1448,7 @@ class Display:
                      f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
                      f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", "",
                      record_note or "Training flight / unranked", "",
-                     "[R] Retry    [M] Mission briefing    [Q] Return"]
+                     "[R] Retry    [M] Mission briefing", self.back]
         elif mode == "scores":
             lines = ["BEST PILOTS / " + mission.name, ""]
             lines += [f"{i:2}. {plain(name, 30):30} {score:6} pts" for i, (name, score) in enumerate(standings or [], 1)]
@@ -1450,7 +1465,7 @@ class Display:
     def menu(self, c: Canvas, mission: Mission, catalog: tuple, record_note: str, clock_note: str):
         """The flight director: every mission on a fixed grid, the chosen one briefed."""
         unicode = self.host.unicode
-        box_w, box_h = min(76, c.width - 2), 19
+        box_w, box_h = min(76, c.width - 2), 20
         x0, y0 = (c.width - box_w) // 2, max(1, (c.height - box_h) // 2)
         c.frame(x0, y0, box_w, box_h, "LUNAR LANDER / FLIGHT DIRECTOR", unicode)
         lx, rx = x0 + 3, x0 + 37
@@ -1479,12 +1494,14 @@ class Display:
             c.rich(rx + (n % 2) * 18, y0 + 9 + n // 2, [(label + " ", 9), (value, 6)], PANEL)
         for n, line in enumerate(textwrap.wrap(record_note or ("UNRANKED TRAINING" if not mission.difficulty
                                                                else "RANKED FLIGHT"), rw)[:2]):
-            c.text(rx, y0 + 12 + n, line, 12, PANEL)
+            c.text(rx, y0 + 11 + n, line, 12, PANEL)
         c.text(x0 + 1, y0 + 13, ("─" if unicode else "-") * (box_w - 2), EDGE, PANEL)
-        c.annotated(lx, y0 + 14, "[W/S] Thrust  [A/D] Tilt  [0-9] Power  [SPACE] Cut  [X] Level", PANEL, box_w - 6)
+        c.annotated(lx, y0 + 14, f"[W/S {self.arrows[1]}] Thrust  [A/D {self.arrows[0]}] Tilt  [0-9] Power  "
+                    "[SPACE] Cut  [X] Level", PANEL, box_w - 6)
         c.annotated(lx, y0 + 15, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
         c.text(lx, y0 + 16, plain(clock_note, box_w - 6), 9, PANEL)
-        c.annotated(lx, y0 + 17, "[ENTER] Launch  [B] Best pilots  [?] Manual  [Q] Return", PANEL, box_w - 6)
+        c.annotated(lx, y0 + 17, "[ENTER] Launch  [B] Best pilots  [?] Manual", PANEL, box_w - 6)
+        c.annotated(lx, y0 + 18, self.back, PANEL, box_w - 6)
 
     def landscape(self, ground: Terrain, left: float, metres: float, top: float, width: int,
                   view_h: int, large: bool) -> tuple:
@@ -1692,8 +1709,9 @@ class Display:
             c.rich(status_x, row + 4, [("LAND  V<=", 9), ("3", 6), ("  H<=", 9), ("2", 5), ("  T<=", 9), ("10", 12)], PANEL)
         else:
             c.text(status_x, row + 4, message, 8, PANEL)
-        c.annotated(2, row + 5, "[A/D] Tilt [W/S] Thrust [0-9] Power [SPACE] Cut [X] Level", PANEL)
-        c.annotated(2, row + 6, "[P] Pause  [?] Flight manual  [Q] Quit", PANEL)
+        c.annotated(2, row + 5, f"[A/D {self.arrows[0]}] Tilt  [W/S {self.arrows[1]}] Thrust  [0-9] Power  "
+                    "[SPACE] Cut  [X] Level", PANEL)
+        c.annotated(2, row + 6, "[P] Pause  [?] Flight manual  " + self.back, PANEL)
 
 
 def pad_half(st: Stage) -> int:
@@ -1718,6 +1736,8 @@ class Game:
         self.slow = False
         self.standings = []
         self.record_note = ""
+        self.before_quit = "flying"
+        self.leaving = False
 
     def refresh_daily(self):
         day = self.clock.day()
@@ -1748,6 +1768,21 @@ class Game:
 
     def key(self, key: str) -> bool:
         """Return True on a screen transition: discard remaining typed-ahead keys."""
+        if self.mode == "confirm":
+            if key == "y":
+                self.leaving = True
+            elif key in ("n", "escape"):
+                self.mode = self.before_quit
+            return True
+        if key == "q":
+            # Leaving mid-flight forfeits the attempt, so it asks first; elsewhere
+            # nothing is lost and Q returns to the BBS at once.
+            flight_mode = self.before_help if self.mode == "help" else self.mode
+            if flight_mode in ("flying", "paused"):
+                self.before_quit, self.mode = flight_mode, "confirm"
+            else:
+                self.leaving = True
+            return True
         if self.mode in SCENE_SECONDS:
             self.finish_scene()
             return True
@@ -1899,11 +1934,12 @@ def run(host: Host, started: float) -> int:
                 if data == b"":
                     break
                 for key in keys.feed(data or b"", now):
-                    if key == "q":
+                    if key == "abort":
                         stopped = True
                         break
                     if game.key(key):
                         next_frame = 0
+                        stopped = game.leaving
                         break
                 data = None
     finally:

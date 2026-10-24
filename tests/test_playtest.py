@@ -147,6 +147,76 @@ class PresentationTests(unittest.TestCase):
                             self.assertTrue(display.encode(later).isascii())
 
 
+class PlaytestFindingTests(unittest.TestCase):
+    def rows(self, canvas):
+        return ["".join(cell[0] for cell in row) for row in canvas.cells]
+
+    def test_ranking_notes_are_never_cut_by_the_card_rule(self):
+        for note in ("RANKED FLIGHT / best landing per pilot",
+                     "PRACTICE ONLY / no persistent NetBBS caller identity",
+                     "PRACTICE ONLY / pilot records unavailable"):
+            with self.subTest(note=note):
+                canvas = ll.Display(ll.Host()).draw(ll.training(), "menu", mission=ll.missions()[1],
+                                                    record_note=note)
+                text = " ".join(self.rows(canvas))
+                for line in ll.textwrap.wrap(note, 36):
+                    self.assertIn(line, text)
+
+    def test_q_returns_at_once_except_mid_flight(self):
+        for mode in ("menu", "debrief", "scores", "splash"):
+            with self.subTest(mode=mode):
+                game = ll.Game(scenes=True)
+                game.mode = mode
+                self.assertTrue(game.key("q"))
+                self.assertTrue(game.leaving)
+
+    def test_q_mid_flight_asks_and_freezes_the_flight(self):
+        for mode in ("flying", "paused", "help"):
+            with self.subTest(mode=mode):
+                game = ll.Game()
+                game.key("enter")
+                game.tick(.1, True)
+                if mode == "paused":
+                    game.key("p")
+                elif mode == "help":
+                    game.key("?")
+                game.key("q")
+                self.assertEqual((game.mode, game.leaving), ("confirm", False))
+                elapsed = game.flight.elapsed
+                game.tick(1, True)
+                game.key("w")
+                self.assertEqual((game.flight.elapsed, game.flight.throttle), (elapsed, 0))
+                game.key("n")
+                self.assertEqual(game.mode, "paused" if mode == "paused" else "flying")
+                game.key("q")
+                game.key("y")
+                self.assertTrue(game.leaving)
+
+    def test_control_c_and_d_still_exit_immediately(self):
+        self.assertEqual(ll.Keys().feed(b"q", 0), ["abort", "abort", "q"])
+
+    def test_return_names_the_bbs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "door.json"
+            for name, expected in (("Moonbase [7]", "Moonbase 7"), (None, "NetBBS"), ("   ", "NetBBS")):
+                data = {"door_api": 5} if name is None else {"door_api": 5, "node_name": name}
+                path.write_text(ll.json.dumps(data), encoding="utf-8")
+                self.assertEqual(ll.Host.load(str(path)).bbs, expected)
+        host = ll.Host(bbs="Moonbase 7")
+        for mode in ("menu", "flying", "debrief", "help", "paused", "confirm"):
+            with self.subTest(mode=mode):
+                text = " ".join(self.rows(ll.Display(host).draw(ll.training(), mode)))
+                self.assertIn("Return to Moonbase 7", text)
+
+    def test_cursor_keys_are_advertised(self):
+        for unicode, tilt, thrust in ((True, "←→", "↑↓"), (False, "<>", "^v")):
+            for mode in ("flying", "menu", "help"):
+                with self.subTest(unicode=unicode, mode=mode):
+                    text = " ".join(self.rows(ll.Display(ll.Host(unicode=unicode)).draw(ll.training(), mode)))
+                    self.assertIn(f"A/D {tilt}", text)
+                    self.assertIn(f"W/S {thrust}", text)
+
+
 class SceneLifecycleTests(unittest.TestCase):
     def test_scene_skip_key_does_not_become_flight_control(self):
         game = ll.Game(scenes=True, splash=True)
