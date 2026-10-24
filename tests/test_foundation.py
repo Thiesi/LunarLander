@@ -139,13 +139,15 @@ class ProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "door.json"
             path.write_text(json.dumps({"door_api": 5, "session_limit_seconds": .6}))
-            with subprocess.Popen([sys.executable, "lunar_lander.py"], stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            with tempfile.TemporaryFile() as capture, subprocess.Popen([sys.executable, "lunar_lander.py"], stdin=subprocess.PIPE,
+                    stdout=capture, stderr=subprocess.PIPE,
                     env={**os.environ, "NETBBS_DOOR_INFO": str(path)}) as process:
                 started = time.monotonic()
                 self.assertEqual(process.wait(timeout=3), 0)
                 self.assertLess(time.monotonic() - started, 2)
-                output, error = process.communicate()
+                _, error = process.communicate()
+                capture.seek(0)
+                output = capture.read()
                 self.assertIn(b"\x1b[?25h", output)
                 self.assertEqual(error, b"")
 

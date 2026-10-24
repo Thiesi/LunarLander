@@ -13,6 +13,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import select
 import signal
 import sys
@@ -339,8 +340,269 @@ def training() -> Flight:
                            (450, 75), (600, 120), (750, 60), (900, 100), (1000, 80)), pad))
 
 
+# Palette entries are RGB, xterm-256 index, ANSI foreground code.
+COLORS = (
+    ((7, 12, 25), 232, 30),       # 0 deep sky
+    ((16, 25, 43), 234, 30),      # 1 panel
+    ((43, 57, 76), 238, 34),      # 2 distant mountains
+    ((80, 99, 117), 242, 37),     # 3 lunar rock
+    ((136, 157, 170), 246, 37),   # 4 lit surface
+    ((232, 180, 85), 179, 93),    # 5 gold
+    ((89, 220, 216), 80, 96),     # 6 cyan
+    ((225, 235, 236), 255, 97),   # 7 white
+    ((238, 105, 84), 203, 91),    # 8 warning
+    ((85, 119, 151), 67, 36),     # 9 subdued text
+    ((45, 132, 174), 31, 94),     # 10 Earth
+    ((196, 221, 217), 152, 97),   # 11 cloud
+)
+
+
+def sgr(foreground: int, background: int, depth: str) -> str:
+    if depth == "truecolor":
+        fg, bg = COLORS[foreground][0], COLORS[background][0]
+        return f"\x1b[38;2;{fg[0]};{fg[1]};{fg[2]};48;2;{bg[0]};{bg[1]};{bg[2]}m"
+    if depth == "256":
+        return f"\x1b[38;5;{COLORS[foreground][1]};48;5;{COLORS[background][1]}m"
+    return f"\x1b[{COLORS[foreground][2]};{COLORS[background][2] + 10}m"
+
+
+class Canvas:
+    def __init__(self, width: int, height: int):
+        # Reserve the last column as well as the terminal's bottom-right cell.
+        self.width, self.height = max(1, width - 1), max(1, height)
+        self.cells = [[(" ", 0, 0) for _ in range(self.width)] for _ in range(self.height)]
+
+    def put(self, x: int, y: int, char: str, fg: int = 7, bg: int = 0):
+        if 0 <= x < self.width and 0 <= y < self.height:
+            self.cells[y][x] = (char, fg, bg)
+
+    def text(self, x: int, y: int, text: str, fg: int = 7, bg: int = 0):
+        for char in plain(text, max(0, self.width - x)):
+            width = 2 if unicodedata.east_asian_width(char) in "WF" else 1
+            self.put(x, y, char, fg, bg)
+            if width == 2:
+                self.put(x + 1, y, "", fg, bg)
+            x += width
+
+    def panel(self, x: int, y: int, width: int, lines: list[str], unicode: bool = True):
+        width = min(width, self.width - x)
+        horizontal, vertical = ("─", "│") if unicode else ("-", "|")
+        for row in range(y, min(self.height, y + len(lines) + 2)):
+            for col in range(x, x + width):
+                self.put(col, row, " ", 7, 1)
+        self.text(x, y, "+" + horizontal * (width - 2) + "+", 5, 1)
+        for n, line in enumerate(lines, y + 1):
+            self.text(x, n, vertical, 5, 1)
+            self.text(x + 2, n, plain(line, width - 4), 7, 1)
+            self.text(x + width - 1, n, vertical, 5, 1)
+        self.text(x, y + len(lines) + 1, "+" + horizontal * (width - 2) + "+", 5, 1)
+
+
+class Display:
+    def __init__(self, host: Host):
+        self.host = host
+        self.previous: list | None = None
+        self.camera: tuple[float, float] | None = None
+
+    def encode(self, canvas: Canvas) -> str:
+        """Only changed cell runs; no scrolling, erase or clear on ordinary frames."""
+        output = []
+        if self.previous is None:
+            output.append("\x1b[2J")
+        for y, row in enumerate(canvas.cells):
+            old = self.previous[y] if self.previous is not None else None
+            x = 0
+            while x < len(row):
+                if old is not None and row[x] == old[x]:
+                    x += 1
+                    continue
+                start = x
+                fg, bg = row[x][1:]
+                chars = []
+                while x < len(row) and row[x][1:] == (fg, bg) and (old is None or row[x] != old[x]):
+                    chars.append(row[x][0])
+                    x += 1
+                output.append(f"\x1b[{y + 1};{start + 1}H" + sgr(fg, bg, self.host.color) + "".join(chars))
+        self.previous = canvas.cells
+        return "".join(output)
+
+    def draw(self, flight: Flight, mode: str = "flying", remaining: float | None = None,
+             slow: bool = False) -> Canvas:
+        c = Canvas(self.host.width, self.host.height)
+        if self.host.width < 80 or self.host.height < 24:
+            c.text(0, 0, "Resize to 80x24. Q: exit", 5)
+            c.text(0, 2, "Flight paused; session timer continues.", 7)
+            return c
+        width, height = c.width, c.height
+        ground = flight.terrain
+        altitude = max(0, flight.y - ground.height(flight.x) - 3)
+        view_y, view_h = 3, height - 10
+        # Fixed overview and landing scales prevent continuous landscape repainting.
+        span = 1000.0 if altitude > 100 else 400.0
+        left = max(0.0, min(1000 - span, flight.x - span / 2))
+        if self.camera is None:
+            self.camera = (span, left)
+        else:
+            old_span, old_left = self.camera
+            self.camera = (old_span + (span - old_span) * .2, old_left + (left - old_left) * .2)
+        span, left = self.camera
+        # Quantize the camera to the raster so tiny numerical changes don't shimmer.
+        span = round(span / 10) * 10
+        metres = span / width
+        left = round(left / metres) * metres
+        bottom = max(-20.0, flight.y - view_h * 2 * metres * .65)
+        bottom = round(bottom / metres) * metres
+        top = bottom + view_h * 2 * metres
+        pixels = [[0] * width for _ in range(view_h * 2)]
+        for py, row in enumerate(pixels):
+            world_y = top - py * metres
+            for px in range(width):
+                world_x = left + px * metres
+                surface = ground.height(world_x)
+                distant = 110 + 35 * math.sin(world_x / 95) + 20 * math.sin(world_x / 43)
+                if world_y <= surface:
+                    grain = (int(world_x / 7) * 73856093) ^ (int(world_y / 9) * 19349663)
+                    row[px] = 4 if world_y > surface - metres * 1.5 else 3 if grain % 19 == 0 else 2
+                elif world_y < distant:
+                    row[px] = 1
+        # Tiny stars and a shaded Earth are screen-space decoration, never collision.
+        ex, ey = width - 12, 5
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                if dx * dx + dy * dy <= 16 and 0 <= ey + dy < len(pixels):
+                    pixels[ey + dy][ex + dx] = 10 if dx < 1 else 2
+                    if dx < 1 and (dx + dy * 2) % 5 == 0:
+                        pixels[ey + dy][ex + dx] = 11
+        for row in range(view_h):
+            for x in range(width):
+                upper, lower = pixels[2 * row][x], pixels[2 * row + 1][x]
+                if self.host.unicode:
+                    c.put(x, view_y + row, "▀" if upper != lower else " ", upper, lower)
+                else:
+                    c.put(x, view_y + row, "#" if upper in (2, 3, 4) else "." if upper in (7, 9) else " ", upper, lower)
+        stars = random.Random(19690720)
+        for n in range(width * view_h // 45):
+            px, py = stars.randrange(width), stars.randrange(view_h)
+            if pixels[2 * py][px] == pixels[2 * py + 1][px] == 0:
+                c.put(px, view_y + py, "+" if n % 11 == 0 else ".", 7 if n % 4 == 0 else 9)
+        pad = ground.pad
+        pad_x = round(((pad.left + pad.right) / 2 - left) / metres)
+        pad_y = view_y + round((top - pad.height) / metres / 2)
+        pad_left, pad_right = round((pad.left - left) / metres), round((pad.right - left) / metres)
+        for x in range(pad_left, pad_right + 1):
+            c.put(x, pad_y, "═" if self.host.unicode else "=", 6)
+        c.text(max(0, pad_x - 3), min(view_y + view_h - 1, pad_y + 1), "[ PAD ]", 6)
+        # An enlarged navigation symbol preserves visibility at overview scale.
+        sx, sy = round((flight.x - left) / metres), view_y + round((top - flight.y) / metres / 2)
+        sy = max(view_y + 1, min(view_y + view_h - 3, sy))
+        if flight.status == "crashed":
+            c.text(sx - 2, sy, "* X *", 8)
+        else:
+            nose = "/^\\" if abs(flight.angle) <= 10 else " /=" if flight.angle > 0 else "=\\ "
+            c.text(sx - 1, sy - 1, nose, 5)
+            c.text(sx - 2, sy, "/[_]\\", 5)
+            if flight.throttle and flight.fuel > 0 and flight.status == "flying":
+                c.text(sx - 1, sy + 1, " v " if flight.throttle < .5 else "V V", 8)
+        c.text(2, 0, "L U N A R   L A N D E R", 5)
+        c.text(width - 28, 0, "FLIGHT / TRANQUILITY BASE", 9)
+        c.text(2, 1, "PILOT " + self.host.handle, 7)
+        c.text(width - 28, 1, f"VIEW {span:4.0f} m  |  {flight.elapsed:5.1f}s", 6)
+        c.text(0, 2, ("─" if self.host.unicode else "-") * width, 2)
+        row = height - 7
+        c.text(0, row, ("─" if self.host.unicode else "-") * width, 2)
+        for x, title, value, color in ((2, "ALTITUDE", f"{altitude:7.1f} m", 7),
+                (2 + width // 4, "VERTICAL", f"{flight.vy:+7.1f} m/s", 8 if abs(flight.vy) > 3 else 6),
+                (2 + width // 2, "DRIFT", f"{flight.vx:+6.1f} m/s", 8 if abs(flight.vx) > 2 else 6),
+                (2 + width * 3 // 4, "FUEL", f"{flight.fuel:5.1f} kg", 8 if flight.fuel < 15 else 5)):
+            c.text(x, row + 1, title, 9)
+            c.text(x, row + 2, value, color)
+        c.text(2, row + 3, f"THRUST [{'|' * round(flight.throttle * 10):10}] {flight.throttle:4.0%}  TILT {flight.angle:+3.0f} deg", 5)
+        message = "LAND: |V|<=3 |H|<=2 TILT<=10"
+        if remaining is not None and remaining < 60:
+            message = f"SESSION ENDS IN {max(0, remaining):.0f}s"
+        elif slow:
+            message = "SLOW LINK: SIMULATION PACED"
+        c.text(46, row + 3, message, 6)
+        c.text(2, row + 5, "A/D tilt  W/S throttle  0-9 power  SPACE cut  X level", 7)
+        c.text(2, row + 6, "P pause  ? flight manual  Q quit", 9)
+        lines = None
+        if mode == "menu":
+            lines = ["LUNAR LANDER / TRAINING BASIN", "", "A quiet sky. A small ship. One chance to get it right.",
+                     "Land on the cyan pad. Keep both feet inside the lights.", "",
+                     "A/D or arrows: tilt     W/S or arrows: throttle",
+                     "Throttle stays set. SPACE cuts thrust. X levels ship.",
+                     "Touch down: vertical <=3 m/s, drift <=2, tilt <=10.", "",
+                     "[ENTER] Launch training    [?] Manual    [Q] Return"]
+        elif mode == "paused":
+            lines = ["FLIGHT PAUSED", "", "[P] Resume flight     [?] Manual     [Q] Return",
+                     "The NetBBS session timer continues while paused."]
+        elif mode == "help":
+            lines = ["FLIGHT MANUAL / A LITTLE THRUST GOES A LONG WAY", "",
+                     "W/S: throttle +/-10%. Digits: 0 off to 9 full.",
+                     "A/D: tilt +/-10 degrees. X: upright. SPACE: cut.",
+                     "Controls stay set; you never need to hold two keys.", "",
+                     "Burn early to slow descent. Tilt against your drift.",
+                     "Watch VERTICAL: negative means falling toward the Moon.",
+                     "Land with |vertical|<=3, |drift|<=2, |tilt|<=10.",
+                     "Fuel burns only with thrust. An empty tank means coast.",
+                     "Training is unranked. Lost connections end the attempt.", "",
+                     "[?] or [ESC] Back    [Q] Return to NetBBS"]
+        elif mode == "debrief":
+            lines = ["CONTACT LIGHT / LANDED" if flight.status == "landed" else "SIGNAL LOST / LANDER DOWN",
+                     "", flight.reason, "",
+                     f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
+                     f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", "",
+                     "[R] Retry training    [M] Briefing    [Q] Return"]
+        if lines is not None:
+            box_width = 65
+            c.panel((width - box_width) // 2, max(3, (height - len(lines) - 2) // 2), box_width, lines, self.host.unicode)
+        return c
+
+
+class Game:
+    def __init__(self):
+        self.flight = training()
+        self.mode = "menu"
+        self.before_help = "menu"
+        self.accumulator = 0.0
+        self.slow = False
+
+    def key(self, key: str) -> bool:
+        """Return True on a screen transition: discard remaining typed-ahead keys."""
+        if key == "?" or (key == "escape" and self.mode == "help"):
+            if self.mode == "help":
+                self.mode = self.before_help
+            else:
+                self.before_help, self.mode = self.mode, "help"
+            return True
+        if self.mode == "menu" and key == "enter":
+            self.flight, self.mode = training(), "flying"
+            return True
+        if self.mode in ("flying", "paused") and key == "p":
+            self.mode = "paused" if self.mode == "flying" else "flying"
+            return True
+        if self.mode == "debrief" and key in ("r", "m"):
+            self.flight, self.mode = training(), "flying" if key == "r" else "menu"
+            return True
+        if self.mode == "flying":
+            self.flight.command(key)
+        return False
+
+    def tick(self, elapsed: float, size_ok: bool):
+        if self.mode != "flying" or not size_ok:
+            self.accumulator = 0
+            return
+        self.slow = elapsed > .25
+        self.accumulator += min(.25, elapsed)
+        while self.accumulator >= DT:
+            self.flight.step()
+            self.accumulator -= DT
+            if self.flight.status != "flying":
+                self.mode, self.accumulator = "debrief", 0
+                break
+
+
 def run(host: Host, started: float) -> int:
-    """Foundation screen. The next slice supplies the flight cockpit."""
     stopped = False
     previous = {}
 
@@ -357,8 +619,11 @@ def run(host: Host, started: float) -> int:
             previous[sig] = signal.signal(sig, handler)
     keys = Keys()
     deadline = None if host.limit is None else started + max(0, host.limit - 0.25)
-    last_size = None
+    display = Display(host)
+    game = Game()
     next_check = 0.0
+    next_frame = 0.0
+    last_tick = time.monotonic()
     try:
         with Terminal() as terminal:
             while not stopped:
@@ -366,20 +631,28 @@ def run(host: Host, started: float) -> int:
                 if deadline is not None and now >= deadline:
                     break
                 if now >= next_check:
-                    host = Host.load(host.path)
+                    updated = Host.load(host.path)
+                    if (updated.width, updated.height, updated.color, updated.unicode) != (host.width, host.height, host.color, host.unicode):
+                        display = Display(updated)
+                    host = updated
                     next_check = now + 0.5
-                size = (host.width, host.height)
-                if size != last_size:
-                    message = "LUNAR LANDER | Flight systems ready. Q: return to NetBBS"
-                    if host.width < 80 or host.height < 24:
-                        message = "Resize to 80x24. Q: exit"
-                    terminal.write("\x1b[2J\x1b[H" + plain(message, max(0, host.width - 1)))
-                    last_size = size
+                game.tick(now - last_tick, host.width >= 80 and host.height >= 24)
+                last_tick = now
+                if now >= next_frame:
+                    remaining = None if deadline is None else deadline - now
+                    frame = display.draw(game.flight, game.mode, remaining, game.slow)
+                    terminal.write(display.encode(frame))
+                    next_frame = now + .1
                 data = terminal.read()
                 if data == b"":
                     break
-                if "q" in keys.feed(data or b"", now):
-                    break
+                for key in keys.feed(data or b"", now):
+                    if key == "q":
+                        stopped = True
+                        break
+                    if game.key(key):
+                        next_frame = 0
+                        break
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
