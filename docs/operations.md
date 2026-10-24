@@ -36,8 +36,8 @@ score per pilot per mission; equal scores keep the earlier achieved result.
    `/var/games/netbbs/lunar-lander`. Use an installed Python 3.11+ interpreter.
 3. Import `netbbs.json` through NetBBS's door Compatibility setup. Replace
    `executable_path`, `profile.install_dir` and `DOOR_LL_DATA_DIR` with absolute
-   paths on that host. On Windows use paths such as `C:/Python312/python.exe` and
-   `C:/NetBBS/doors/lunar-lander`; the shipped paths are POSIX examples.
+   paths on that host. The shipped POSIX paths are examples for a NetBSD or Linux
+   service installation; adjust them to your interpreter and game directory.
 4. Give the BBS service account read access to the script and write access to the
    chosen data directory. Keep the entry SysOp-only until Test as SysOp and real
    caller transport checks pass. Do not enable outbound posting; LL does not use it.
@@ -59,9 +59,8 @@ the same account identity. LL cannot infer guest privileges from the public API.
 ANSI cursor addressing. Plain non-ANSI terminals and classic DOS/DOOR32 launching
 are not supported in this release.
 
-POSIX NetBBS hosts forward size changes via republished JSON and SIGUSR1. LL also
-polls metadata to coalesce notifications. NetBBS's current Windows host does not
-republish native resize metadata: select the terminal size before launch there.
+NetBBS forwards size changes via republished JSON and SIGUSR1. LL also
+polls metadata to coalesce notifications.
 Resizing below 80x24 pauses the simulation wherever the host publishes the change.
 Pause/help/resize do not extend the host's session time; LL warns in the last minute
 and exits just before the published deadline. Disconnect forfeits the active flight.
@@ -109,7 +108,7 @@ delete a broken database, clear its schema version, or substitute another node's
 | Door cannot start | Check absolute Python/script/install paths and service-account permissions; inspect NetBBS's Last diagnostic |
 | Practice only | Confirm node/account metadata and writable `DOOR_LL_DATA_DIR`; read stderr for the precise database failure |
 | Garbled blocks/colors | Confirm UTF-8 profile and terminal encoding; select a suitable NetBBS glyph/color preference |
-| Flight paused for size | Enlarge to 80x24; on Windows choose size before launching |
+| Flight paused for size | Enlarge to 80x24 |
 | Slow link indicator | LL caps physics catch-up to avoid a sudden unseen crash; use a faster terminal connection or smaller window |
 | Crash too quickly | Begin braking earlier; use training and the vertical-speed gauge, not just the enlarged ship symbol |
 
@@ -123,7 +122,8 @@ python scripts/netbbs_smoke.py
 The second command requires an installed NetBBS and uses disposable nodes/data only.
 It launches the real native runtime, checks screen contents through NetBBS's terminal
 emulator and retains ANSI captures under `.task/native-acceptance`. CI pins the host
-commit and runs Python 3.11 on Linux and Windows. It does not test a real client.
+commit and runs Python 3.11 on Linux and Windows. Windows is a development check,
+not a production NetBBS deployment target. It does not test a real client.
 
 `scripts/capture.py --output .task/flight.png` exports the game's actual ANSI frame
 and a PNG preview (Pillow is a development-only dependency). `--width 132 --height 50`,
