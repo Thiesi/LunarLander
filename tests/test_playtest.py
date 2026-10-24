@@ -70,11 +70,19 @@ class PresentationTests(unittest.TestCase):
         flight = ll.training()
         flight.angle, flight.throttle = 30, .7
         canvas = ll.Display(ll.Host()).draw(flight)
-        row = canvas.cells[20]
+        row = canvas.cells[21]
         text = "".join(cell[0] for cell in row)
         for value, color in (("70%", 5), ("+30", 12), ("3", 6), ("2", 5), ("10", 12)):
-            start = text.index(value, 46 if value in ("3", "2", "10") else 0)
+            start = text.index(value, text.index("LAND") if value in ("3", "2", "10") else 0)
             self.assertTrue(all(cell[1] == color for cell in row[start:start + len(value)]), (value, row))
+
+    def test_unsafe_speeds_are_named_not_only_colored(self):
+        flight = ll.training()
+        flight.vy, flight.vx, flight.fuel = -6, 3, 5
+        canvas = ll.Display(ll.Host()).draw(flight)
+        values = "".join(cell[0] for cell in canvas.cells[19])
+        for word in ("FAST", "WIDE", "LOW"):
+            self.assertIn(word, values)
 
     def test_manual_values_stand_out(self):
         canvas = ll.Display(ll.Host()).draw(ll.training(), "help")
@@ -83,10 +91,46 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual([c[1] for c in row[start:start + 3]], [6, 6, 6])
 
     def test_tilt_rotates_the_whole_symmetric_hull(self):
-        left, right = ll.lander_pixels(-40, .7), ll.lander_pixels(40, .7)
-        self.assertEqual({(-x, y): c for (x, y), c in left.items()}, right)
-        self.assertTrue(any(x > 0 and color == 6 for (x, _), color in right.items()))
-        self.assertTrue(any(x < 0 and color == 8 for (x, _), color in right.items()))
+        left, right = ll.lander_roles(-40, .7), ll.lander_roles(40, .7)
+        self.assertEqual({(-x, y): role for (x, y), role in left.items()}, right)
+        # Tilted right, the window leans right and the plume trails left.
+        self.assertTrue(any(x > 0 and role == "W" for (x, _), role in right.items()))
+        self.assertTrue(any(x < 0 and role in ll._FLAME for (x, _), role in right.items()))
+        self.assertEqual(set(ll.lander_roles(0, .7)), set(ll.lander_pixels(0, .7)))
+
+    def test_sprites_are_rectangular_and_fully_colored(self):
+        for rows in (ll._LANDER_SMALL, ll._LANDER_MEDIUM, ll._LANDER_LARGE):
+            self.assertEqual(len({len(row) for row in rows}), 1)
+        for size in ll.LANDERS:
+            for role in ll.lander_roles(20, 1, .3, size).values():
+                self.assertIn(role, ll.LANDER_COLORS)
+        medium = ll.lander_roles(-30, .5, size="medium"), ll.lander_roles(30, .5, size="medium")
+        self.assertEqual({(-x, y): role for (x, y), role in medium[0].items()}, medium[1])
+
+    def test_menu_missions_share_one_grid(self):
+        canvas = ll.Display(ll.Host()).draw(ll.training(), "menu")
+        rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
+        listed = [row for row in rows if ll.re.search(r"\[[1-9]\] ", row)]
+        self.assertEqual(len(listed), 9)
+        self.assertEqual(len({row.index("]") for row in listed}), 1)
+        # Difficulty pips start in one column whatever the mission's name.
+        self.assertEqual(len({min(i for i in (row.find("■"), row.find("free")) if i >= 0) for row in listed}), 1)
+
+    def test_stars_never_sit_on_scenery(self):
+        display = ll.Display(ll.Host(132, 50))
+        canvas = display.draw(ll.training(), "splash", scene_age=6)
+        for row in canvas.cells:
+            for char, _, bg in row:
+                if char in "·+*":
+                    self.assertLess(max(ll.rgb(bg)), 70, bg)
+
+    def test_scenery_colors_map_to_every_depth(self):
+        for color in ((7, 12, 25), (248, 204, 96), (120, 226, 240), (204, 66, 42), (126, 130, 148)):
+            self.assertTrue(16 <= ll.xterm256(color) <= 255)
+            self.assertTrue(0 <= ll.ansi16(color) <= 15)
+        self.assertEqual(ll.ansi16((204, 66, 42)) % 8, 1)
+        self.assertEqual(ll.ansi16((248, 204, 96)) % 8, 3)
+        self.assertEqual(ll.ansi16((3, 5, 14)), 0)
 
     def test_all_scenes_change_and_fit_in_supported_modes(self):
         for width, height in ((80, 24), (132, 50)):
@@ -120,8 +164,13 @@ class SceneLifecycleTests(unittest.TestCase):
         game = ll.Game(scenes=True, splash=True)
         game.tick(10, False)
         self.assertEqual((game.mode, game.scene_age), ("splash", 0))
-        game.tick(4, True)
-        self.assertEqual(game.mode, "menu")
+        # Played out, the splash holds under its prompt until a key, which it spends.
+        game.tick(30, True)
+        self.assertEqual(game.mode, "splash")
+        canvas = ll.Display(ll.Host()).draw(game.flight, "splash", scene_age=game.scene_age)
+        self.assertIn(ll.SPLASH_PROMPT, "".join(cell[0] for cell in canvas.cells[-1]))
+        self.assertTrue(game.key("w"))
+        self.assertEqual((game.mode, game.flight.throttle), ("menu", 0))
         game.key("enter")
         game.tick(2, True)
         self.assertEqual((game.mode, game.flight.elapsed), ("flying", 0))

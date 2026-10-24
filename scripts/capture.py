@@ -9,7 +9,7 @@ import lunar_lander as ll
 
 def render_canvas(canvas):
     from PIL import Image, ImageDraw, ImageFont
-    image = Image.new("RGB", ((canvas.width + 1) * 10, canvas.height * 20), ll.COLORS[0][0])
+    image = Image.new("RGB", ((canvas.width + 1) * 10, canvas.height * 20), ll.rgb(0))
     draw = ImageDraw.Draw(image)
     font = None
     for path in ("C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"):
@@ -20,11 +20,11 @@ def render_canvas(canvas):
         font = ImageFont.load_default()
     for y, row in enumerate(canvas.cells):
         for x, (char, fg, bg) in enumerate(row):
-            draw.rectangle((x * 10, y * 20, x * 10 + 9, y * 20 + 19), fill=ll.COLORS[bg][0])
+            draw.rectangle((x * 10, y * 20, x * 10 + 9, y * 20 + 19), fill=ll.rgb(bg))
             if char == "▀":
-                draw.rectangle((x * 10, y * 20, x * 10 + 9, y * 20 + 9), fill=ll.COLORS[fg][0])
+                draw.rectangle((x * 10, y * 20, x * 10 + 9, y * 20 + 9), fill=ll.rgb(fg))
             elif char.strip():
-                draw.text((x * 10, y * 20), char, font=font, fill=ll.COLORS[fg][0])
+                draw.text((x * 10, y * 20), char, font=font, fill=ll.rgb(fg))
     return image
 
 
@@ -44,12 +44,15 @@ def main():
     flight = ll.training()
     flight.throttle = .7
     flight.angle = args.angle
+    if args.mode == "crash":
+        flight.reason = "Hard impact: reduce vertical speed to 3 m/s or less."
     canvas = display.draw(flight, args.mode, scene_age=args.scene_time)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.with_suffix(".ans").write_bytes(display.encode(canvas).encode("utf-8"))
     if args.gif:
         frames = [render_canvas(display.draw(flight, args.mode, scene_age=n / 10))
-                  for n in range(int(ll.SCENE_SECONDS.get(args.mode, 3) * 10))]
+                  # The splash's last second and a half is its hold under the prompt.
+                  for n in range(int(ll.SCENE_SECONDS.get(args.mode, 3) * 10) + (15 if args.mode == "splash" else 0))]
         frames[0].save(args.output, save_all=True, append_images=frames[1:], duration=100, loop=0)
     else:
         render_canvas(canvas).save(args.output)

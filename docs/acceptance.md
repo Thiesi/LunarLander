@@ -23,8 +23,10 @@ that every NetBBS transport or target operating system has been certified.
 - Inspected rendered 80x24 and 132x50 cockpit captures, briefing and help. Layout
   tests cover 16/256/truecolor and ASCII/Unicode. Animated arrival, ignition,
   landing and crash captures are generated from the actual terminal renderer.
-  A sample rc.1 default 80x24 frame was
-  8,251 bytes initially and 112 bytes after 0.1 seconds of early flight; camera
+  After the visual overhaul, a default 80x24 256-color flight frame is about
+  11,000 bytes initially (17,000 in truecolor, 6,100 in 16 colors) and about
+  170 bytes per frame in early flight (rc.1 drew 8,251 and 112). The 80x24
+  truecolor splash sends about 119,000 bytes over its five seconds. Camera
   transitions and large screens require more bandwidth. These are not worst-case
   network measurements.
 
