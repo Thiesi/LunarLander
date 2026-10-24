@@ -217,6 +217,25 @@ class PlaytestFindingTests(unittest.TestCase):
                     self.assertIn(f"W/S {thrust}", text)
 
 
+class CpuBudgetTests(unittest.TestCase):
+    def test_estimates_from_the_recent_rate_and_stops_before_the_ceiling(self):
+        used = [0.0]
+        budget = ll.CpuBudget(limit=60, usage=lambda: used[0])
+        self.assertGreater(budget.remaining(0), 1000)
+        used[0] = 5.0
+        # 5 CPU-seconds over 10 s: half a CPU, 52 seconds of budget left.
+        self.assertAlmostEqual(budget.remaining(10), 104)
+        used[0] = 57.5
+        self.assertEqual(budget.remaining(20), 0)
+
+    def test_no_ceiling_means_no_estimate(self):
+        self.assertIsNone(ll.CpuBudget(limit=None, usage=lambda: 1.0).remaining(0))
+
+    def test_shipped_profile_has_headroom(self):
+        profile = ll.json.loads((Path(__file__).resolve().parents[1] / "profiles/netbbs.json").read_text())
+        self.assertGreaterEqual(profile["profile"]["cpu_seconds"], 900)
+
+
 class SceneLifecycleTests(unittest.TestCase):
     def test_scene_skip_key_does_not_become_flight_control(self):
         game = ll.Game(scenes=True, splash=True)

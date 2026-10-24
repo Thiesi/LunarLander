@@ -1863,6 +1863,44 @@ class Game:
                 break
 
 
+class CpuBudget:
+    """The host's CPU-seconds ceiling (RLIMIT_CPU). NetBBS sets the soft and hard
+    limits equal, so the kernel's first word is SIGKILL: the game watches its own
+    use instead, warns like the session deadline, and leaves cleanly first."""
+    MARGIN = 3.0
+
+    def __init__(self, limit: float | None = None, usage=None):
+        self.limit, self.usage = limit, usage
+        if usage is None:
+            try:
+                import resource
+                soft, _ = resource.getrlimit(resource.RLIMIT_CPU)
+                if soft != resource.RLIM_INFINITY and soft > 0:
+                    self.limit = float(soft)
+
+                    def usage():
+                        own = resource.getrusage(resource.RUSAGE_SELF)
+                        return own.ru_utime + own.ru_stime
+                    self.usage = usage
+            except (ImportError, AttributeError, OSError, ValueError):
+                pass
+        self.samples: list[tuple[float, float]] = []
+
+    def remaining(self, now: float) -> float | None:
+        """Estimated wall seconds until the budget is spent (at the recent rate),
+        `0` once it is, or `None` without a ceiling."""
+        if self.limit is None or self.usage is None:
+            return None
+        used = self.usage()
+        self.samples = [sample for sample in self.samples if now - sample[0] <= 10] + [(now, used)]
+        left = self.limit - self.MARGIN - used
+        if left <= 0:
+            return 0.0
+        then, before = self.samples[0]
+        rate = (used - before) / (now - then) if now - then >= 1 else 0.0
+        return left / max(rate, 0.02)
+
+
 def run(host: Host, started: float) -> int:
     stopped = False
     previous = {}
@@ -1898,6 +1936,8 @@ def run(host: Host, started: float) -> int:
     next_check = 0.0
     next_frame = 0.0
     last_tick = time.monotonic()
+    budget = CpuBudget()
+    cpu_left = None
     try:
         with Terminal() as terminal:
             data = None
@@ -1914,6 +1954,9 @@ def run(host: Host, started: float) -> int:
                 if deadline is not None and now >= deadline:
                     break
                 if now >= next_check:
+                    cpu_left = budget.remaining(now)
+                    if cpu_left == 0:
+                        break
                     updated = Host.load(host.path)
                     if (updated.width, updated.height, updated.color, updated.unicode) != (host.width, host.height, host.color, host.unicode):
                         display = Display(updated)
@@ -1922,13 +1965,23 @@ def run(host: Host, started: float) -> int:
                 game.tick(now - last_tick, host.width >= 80 and host.height >= 24)
                 last_tick = now
                 if now >= next_frame:
-                    remaining = None if deadline is None else deadline - now
+                    ends = [left for left in (None if deadline is None else deadline - now, cpu_left)
+                            if left is not None]
+                    remaining = min(ends) if ends else None
                     frame = display.draw(game.flight, game.mode, remaining, game.slow,
                                          game.mission, game.standings, game.record_note, game.scene_age,
                                          clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30),
                                          game.missions)
                     terminal.write(display.encode(frame))
-                    next_frame = now + .1
+                    # Flight and scenes move at 10 fps. A card only changes when a key
+                    # arrives (which redraws at once) or a countdown ticks, and the
+                    # splash's hold only twinkles, so idling costs little CPU.
+                    if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm"):
+                        next_frame = now + 1
+                    elif game.mode == "splash" and game.scene_age >= SCENE_SECONDS["splash"]:
+                        next_frame = now + .25
+                    else:
+                        next_frame = now + .1
                 if data is None:
                     data = terminal.read()
                 if data == b"":

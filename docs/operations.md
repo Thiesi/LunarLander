@@ -55,6 +55,11 @@ score per pilot per mission; equal scores keep the earlier achieved result.
    update these two profile settings themselves; replacing the script does not
    update a registered door. Callers fly independently and compete on shared
    leaderboards; this is not a shared spacecraft or a head-to-head flight.
+6. Allow `cpu_seconds: 900` (the shipped profile; it was 300 before rc.4). LL
+   renders continuously, which NetBBS's door guide notes can exhaust the 300
+   CPU-second default in a long session. NetBBS enforces the ceiling with SIGKILL;
+   LL watches its own use, warns like the session deadline and exits cleanly
+   before reaching it. Existing registrations must raise this setting themselves.
 
 NetBBS supplies the path in `NETBBS_DOOR_INFO`; never place that file beside the
 game manually in a real installation. LL accepts API versions 2–5 and ignores
@@ -147,6 +152,7 @@ delete a broken database, clear its schema version, or substitute another node's
 | Door cannot start | Check absolute Python/script/install paths and service-account permissions; inspect NetBBS's Last diagnostic |
 | Practice only | Confirm node/account metadata and writable `DOOR_LL_DATA_DIR`; read stderr for the precise database failure |
 | Garbled blocks/colors | Confirm UTF-8 profile and terminal encoding; select a suitable NetBBS glyph/color preference |
+| "Exited unexpectedly (code -9)" | The CPU-seconds ceiling killed the door; raise the profile's `cpu_seconds` to 900 and use this release, which exits cleanly before the ceiling |
 | Flight paused for size | Enlarge to 80x24 |
 | Slow link indicator | LL caps physics catch-up to avoid a sudden unseen crash; use a faster terminal connection or smaller window |
 | Crash too quickly | Begin braking earlier; use training and the vertical-speed gauge, not just the enlarged ship symbol |

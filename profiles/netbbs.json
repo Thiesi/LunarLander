@@ -12,7 +12,7 @@
     "height": 0,
     "resize_signal": true,
     "time_limit": 1800,
-    "cpu_seconds": 300,
+    "cpu_seconds": 900,
     "max_sessions": 8,
     "multinode_certified": true,
     "environment": {"DOOR_LL_DATA_DIR": "/var/games/netbbs/lunar-lander/data"}
