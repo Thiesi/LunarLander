@@ -22,7 +22,7 @@ class DisplayTests(unittest.TestCase):
                         if not unicode:
                             self.assertTrue(frame.isascii())
                         if depth == "16":
-                            self.assertNotRegex(frame, r"\x1b\[(?:38|48);")
+                            self.assertNotRegex(frame, r"\x1b\[(?:38|48);[0-9;]*m")
 
     def test_flight_diff_is_smaller_than_full_frame(self):
         display = ll.Display(ll.Host())
