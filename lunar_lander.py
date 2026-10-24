@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from bisect import bisect_right
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 import random
 import select
 import signal
+import sqlite3
 import sys
 import time
 import unicodedata
@@ -340,6 +342,109 @@ def training() -> Flight:
                            (450, 75), (600, 120), (750, 60), (900, 100), (1000, 80)), pad))
 
 
+@dataclass(frozen=True)
+class Mission:
+    key: str
+    name: str
+    description: str
+    difficulty: int
+    center: float
+    width: float
+    altitude: float
+    offset: float
+    drift: float
+    fuel: float
+    seed: int = 0
+
+    def launch(self) -> Flight:
+        if self.difficulty == 0:
+            return training()
+        rng = random.Random(self.seed)
+        pad = Pad(self.center - self.width / 2, self.center + self.width / 2, 35, self.name)
+        points = [(float(x), float(rng.randint(45, 115))) for x in range(0, 1001, 80)
+                  if x < pad.left - 30 or x > pad.right + 30]
+        points.extend(((pad.left, pad.height), (pad.right, pad.height), (1000.0, 80.0)))
+        return Flight(Terrain(tuple(sorted(points)), pad), x=self.center + self.offset,
+                      y=self.altitude, vx=self.drift, vy=-6, fuel=self.fuel, initial_fuel=self.fuel)
+
+
+def missions(day: str | None = None) -> tuple[Mission, ...]:
+    day = day or datetime.now(timezone.utc).date().isoformat()
+    seed = int(day.replace("-", ""))
+    rng = random.Random(seed)
+    return (
+        Mission("training", "TRAINING BASIN", "A wide pad and generous fuel. Learn to brake early.", 0, 300, 100, 180, 0, 0, 90),
+        Mission("tranquility", "TRANQUILITY", "Cancel gentle drift above the broad western basin.", 1, 300, 90, 210, 65, -4, 85, 11),
+        Mission("ridgetop", "RIDGE RUN", "Cross the ridge; a narrower pad rewards precision.", 2, 470, 65, 260, 100, -7, 78, 22),
+        Mission("needle", "THE NEEDLE", "A tiny foothold. Fast approach. Make every burn count.", 3, 680, 45, 280, -110, 9, 70, 33),
+        Mission("daily-" + day, "DAILY " + day, "Same UTC-day flight for every pilot. One best score.", 2,
+                rng.randint(300, 700), rng.randint(55, 80), 250, 80, -6, 80, seed),
+    )
+
+
+class Records:
+    """Node-local identities, short transactions, and one best per mission/pilot."""
+    APP_ID = 0x4C4C0001
+
+    def __init__(self, path: Path):
+        self.db = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.db = sqlite3.connect(path, timeout=2, isolation_level=None)
+            self.db.execute("PRAGMA foreign_keys=ON")
+            self.db.execute("BEGIN IMMEDIATE")
+            version = self.db.execute("PRAGMA user_version").fetchone()[0]
+            identity = self.db.execute("PRAGMA application_id").fetchone()[0]
+            tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not tables and version == identity == 0:
+                self.db.execute("CREATE TABLE pilots (node TEXT NOT NULL, user INTEGER NOT NULL, handle TEXT NOT NULL, PRIMARY KEY(node,user))")
+                self.db.execute("CREATE TABLE scores (node TEXT NOT NULL, user INTEGER NOT NULL, mission TEXT NOT NULL, score INTEGER NOT NULL, achieved INTEGER NOT NULL, PRIMARY KEY(node,user,mission), FOREIGN KEY(node,user) REFERENCES pilots(node,user))")
+                self.db.execute(f"PRAGMA application_id={self.APP_ID}")
+                self.db.execute("PRAGMA user_version=1")
+            elif version != 1 or identity != self.APP_ID or tables != {"pilots", "scores"}:
+                raise DoorError("Records schema is unsupported; preserve the database and use its matching game version.")
+            for table, expected in (("pilots", ["node", "user", "handle"]),
+                                    ("scores", ["node", "user", "mission", "score", "achieved"])):
+                if [row[1] for row in self.db.execute(f"PRAGMA table_info({table})")] != expected:
+                    raise DoorError("Records schema is incomplete; restore a verified backup.")
+            if self.db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise DoorError("Records failed SQLite integrity checking; preserve and restore a verified backup.")
+            self.db.execute("COMMIT")
+        except (OSError, sqlite3.Error, DoorError) as exc:
+            self.close()
+            raise DoorError(f"Pilot records unavailable: {exc}") from exc
+
+    def close(self):
+        if self.db is not None:
+            self.db.close()
+            self.db = None
+
+    def identify(self, host: Host):
+        if host.ranked:
+            self.db.execute("INSERT INTO pilots VALUES (?,?,?) ON CONFLICT(node,user) DO UPDATE SET handle=excluded.handle",
+                            (host.node, host.user, host.handle))
+
+    def save(self, host: Host, mission: Mission, flight: Flight) -> bool:
+        if not host.ranked or not mission.difficulty or flight.status != "landed":
+            return False
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            self.identify(host)
+            changed = self.db.execute("INSERT INTO scores VALUES (?,?,?,?,?) ON CONFLICT(node,user,mission) DO UPDATE SET score=excluded.score, achieved=excluded.achieved WHERE excluded.score > scores.score",
+                (host.node, host.user, mission.key, flight.score(mission.difficulty), time.time_ns())).rowcount
+            self.db.execute("COMMIT")
+            return bool(changed)
+        except sqlite3.Error:
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
+            raise
+
+    def top(self, host: Host, mission: Mission) -> list[tuple[str, int]]:
+        self.identify(host)
+        return self.db.execute("SELECT p.handle,s.score FROM scores s JOIN pilots p USING(node,user) WHERE s.node=? AND s.mission=? ORDER BY s.score DESC,s.achieved,s.user LIMIT 10",
+                               (host.node, mission.key)).fetchall()
+
+
 # Palette entries are RGB, xterm-256 index, ANSI foreground code.
 COLORS = (
     ((7, 12, 25), 232, 30),       # 0 deep sky
@@ -427,7 +532,9 @@ class Display:
         return "".join(output)
 
     def draw(self, flight: Flight, mode: str = "flying", remaining: float | None = None,
-             slow: bool = False) -> Canvas:
+             slow: bool = False, mission: Mission | None = None,
+             standings: list | None = None, record_note: str = "") -> Canvas:
+        mission = mission or missions()[0]
         c = Canvas(self.host.width, self.host.height)
         if self.host.width < 80 or self.host.height < 24:
             c.text(0, 0, "Resize to 80x24. Q: exit", 5)
@@ -504,7 +611,7 @@ class Display:
             if flight.throttle and flight.fuel > 0 and flight.status == "flying":
                 c.text(sx - 1, sy + 1, " v " if flight.throttle < .5 else "V V", 8)
         c.text(2, 0, "L U N A R   L A N D E R", 5)
-        c.text(width - 28, 0, "FLIGHT / TRANQUILITY BASE", 9)
+        c.text(width - 28, 0, "FLIGHT / " + mission.name, 9)
         c.text(2, 1, "PILOT " + self.host.handle, 7)
         c.text(width - 28, 1, f"VIEW {span:4.0f} m  |  {flight.elapsed:5.1f}s", 6)
         c.text(0, 2, ("─" if self.host.unicode else "-") * width, 2)
@@ -527,12 +634,14 @@ class Display:
         c.text(2, row + 6, "P pause  ? flight manual  Q quit", 9)
         lines = None
         if mode == "menu":
-            lines = ["LUNAR LANDER / TRAINING BASIN", "", "A quiet sky. A small ship. One chance to get it right.",
-                     "Land on the cyan pad. Keep both feet inside the lights.", "",
-                     "A/D or arrows: tilt     W/S or arrows: throttle",
-                     "Throttle stays set. SPACE cuts thrust. X levels ship.",
-                     "Touch down: vertical <=3 m/s, drift <=2, tilt <=10.", "",
-                     "[ENTER] Launch training    [?] Manual    [Q] Return"]
+            lines = ["LUNAR LANDER / FLIGHT DIRECTOR", "",
+                     "1 Training     2 Tranquility     3 Ridge Run",
+                     "4 The Needle   5 Daily Challenge", "",
+                     "SELECTED: " + mission.name, mission.description,
+                     record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT"), "",
+                     "A/D tilt | W/S throttle | SPACE cut | X level",
+                     "Touchdown: |vertical|<=3 m/s |drift|<=2 |tilt|<=10", "",
+                     "[ENTER] Launch  [B] Best pilots  [?] Manual  [Q] Return"]
         elif mode == "paused":
             lines = ["FLIGHT PAUSED", "", "[P] Resume flight     [?] Manual     [Q] Return",
                      "The NetBBS session timer continues while paused."]
@@ -545,14 +654,24 @@ class Display:
                      "Watch VERTICAL: negative means falling toward the Moon.",
                      "Land with |vertical|<=3, |drift|<=2, |tilt|<=10.",
                      "Fuel burns only with thrust. An empty tank means coast.",
-                     "Training is unranked. Lost connections end the attempt.", "",
+                     "Score = difficulty x (1000 + 500 x fuel fraction",
+                     "  + 250 x (1-|V|/3) + 250 x (1-|H|/2)).",
+                     "Best per mission; tied scores rank earliest first.",
+                     "Training is unranked. Disconnect forfeits the flight.", "",
                      "[?] or [ESC] Back    [Q] Return to NetBBS"]
         elif mode == "debrief":
             lines = ["CONTACT LIGHT / LANDED" if flight.status == "landed" else "SIGNAL LOST / LANDER DOWN",
                      "", flight.reason, "",
                      f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
                      f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", "",
-                     "[R] Retry training    [M] Briefing    [Q] Return"]
+                     record_note or "Training flight / unranked",
+                     "[R] Retry    [M] Mission briefing    [Q] Return"]
+        elif mode == "scores":
+            lines = ["BEST PILOTS / " + mission.name, ""]
+            lines += [f"{i:2}. {plain(name, 30):30} {score:6} pts" for i, (name, score) in enumerate(standings or [], 1)]
+            if not standings:
+                lines.append(record_note or "No landings recorded for this mission yet.")
+            lines += ["", "[B] or [ESC] Back to mission briefing"]
         if lines is not None:
             box_width = 65
             c.panel((width - box_width) // 2, max(3, (height - len(lines) - 2) // 2), box_width, lines, self.host.unicode)
@@ -560,12 +679,24 @@ class Display:
 
 
 class Game:
-    def __init__(self):
-        self.flight = training()
+    def __init__(self, host: Host | None = None, records: Records | None = None):
+        self.host, self.records = host or Host(), records
+        self.missions = missions()
+        self.mission = self.missions[0]
+        self.flight = self.mission.launch()
         self.mode = "menu"
         self.before_help = "menu"
         self.accumulator = 0.0
         self.slow = False
+        self.standings = []
+        self.record_note = ""
+
+    def ranking_note(self) -> str:
+        if not self.host.ranked:
+            return "PRACTICE ONLY / no persistent NetBBS caller identity"
+        if self.records is None:
+            return "PRACTICE ONLY / pilot records unavailable"
+        return "UNRANKED TRAINING" if not self.mission.difficulty else "RANKED FLIGHT / best landing per pilot"
 
     def key(self, key: str) -> bool:
         """Return True on a screen transition: discard remaining typed-ahead keys."""
@@ -576,13 +707,33 @@ class Game:
                 self.before_help, self.mode = self.mode, "help"
             return True
         if self.mode == "menu" and key == "enter":
-            self.flight, self.mode = training(), "flying"
+            self.flight, self.mode = self.mission.launch(), "flying"
+            self.record_note = self.ranking_note()
+            return True
+        if self.mode == "menu" and key in ("1", "2", "3", "4", "5"):
+            self.mission = self.missions[int(key) - 1]
+            self.flight = self.mission.launch()
+            self.record_note = self.ranking_note()
+            return True
+        if self.mode == "menu" and key == "b":
+            self.standings = []
+            if self.records and self.mission.difficulty:
+                try:
+                    self.standings = self.records.top(self.host, self.mission)
+                except sqlite3.Error as exc:
+                    self.record_note = "Records unavailable; ask your SysOp to check storage."
+                    print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+            self.mode = "scores"
+            return True
+        if self.mode == "scores" and key in ("b", "escape"):
+            self.mode = "menu"
             return True
         if self.mode in ("flying", "paused") and key == "p":
             self.mode = "paused" if self.mode == "flying" else "flying"
             return True
         if self.mode == "debrief" and key in ("r", "m"):
-            self.flight, self.mode = training(), "flying" if key == "r" else "menu"
+            self.flight, self.mode = self.mission.launch(), "flying" if key == "r" else "menu"
+            self.record_note = self.ranking_note()
             return True
         if self.mode == "flying":
             self.flight.command(key)
@@ -598,6 +749,13 @@ class Game:
             self.flight.step()
             self.accumulator -= DT
             if self.flight.status != "flying":
+                if self.flight.status == "landed" and self.mission.difficulty and self.records and self.host.ranked:
+                    try:
+                        best = self.records.save(self.host, self.mission, self.flight)
+                        self.record_note = f"{self.flight.score(self.mission.difficulty)} points / " + ("NEW PERSONAL BEST" if best else "personal best retained")
+                    except sqlite3.Error as exc:
+                        self.record_note = "Landing not saved: storage error. Ask your SysOp."
+                        print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
                 self.mode, self.accumulator = "debrief", 0
                 break
 
@@ -620,7 +778,15 @@ def run(host: Host, started: float) -> int:
     keys = Keys()
     deadline = None if host.limit is None else started + max(0, host.limit - 0.25)
     display = Display(host)
-    game = Game()
+    records = None
+    if host.ranked:
+        try:
+            root = Path(os.environ.get("DOOR_LL_DATA_DIR", str(Path(__file__).resolve().parent / "data")))
+            records = Records(root / "pilots.db")
+        except DoorError as exc:
+            print("Lunar Lander: " + plain(str(exc), 200), file=sys.stderr)
+    game = Game(host, records)
+    game.record_note = game.ranking_note()
     next_check = 0.0
     next_frame = 0.0
     last_tick = time.monotonic()
@@ -640,7 +806,8 @@ def run(host: Host, started: float) -> int:
                 last_tick = now
                 if now >= next_frame:
                     remaining = None if deadline is None else deadline - now
-                    frame = display.draw(game.flight, game.mode, remaining, game.slow)
+                    frame = display.draw(game.flight, game.mode, remaining, game.slow,
+                                         game.mission, game.standings, game.record_note)
                     terminal.write(display.encode(frame))
                     next_frame = now + .1
                 data = terminal.read()
@@ -654,6 +821,8 @@ def run(host: Host, started: float) -> int:
                         next_frame = 0
                         break
     finally:
+        if records:
+            records.close()
         for sig, handler in previous.items():
             signal.signal(sig, handler)
     return 0
