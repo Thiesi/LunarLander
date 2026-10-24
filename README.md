@@ -23,7 +23,9 @@ The game includes:
 - Deterministic lunar physics, fuel management, and precise landing checks.
 - A training basin, seven authored challenges, and a daily challenge that changes
   at the NetBBS node's local midnight.
-- Animated arrival, ignition, touchdown and crash scenes, with a rotating lander.
+- A title splash after the banner art: sunrise over the ranges, a powered
+  descent onto the pad and a pixel wordmark, then ignition, touchdown and crash
+  scenes. The gold-foil lander tilts with its plume and kicks up dust near the ground.
 - Persistent pilot records and leaderboards for completed safe landings.
 - Up to eight concurrent callers with independent flights and shared leaderboards.
 - Native NetBBS play at 80×24 and larger, with more scenery at 132×50.

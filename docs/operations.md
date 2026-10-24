@@ -66,12 +66,18 @@ the same account identity. LL cannot infer guest privileges from the public API.
 ANSI cursor addressing. Plain non-ANSI terminals and classic DOS/DOOR32 launching
 are not supported in this release.
 
-The intro, ignition, successful landing and crash scenes are brief and skippable
+The opening splash plays for about five seconds: sunrise over the ranges, the
+lander's powered descent onto a lit pad, and the wordmark resolving in. It then
+holds under "press any key to begin", as the other native NetBBS doors' splashes
+do. Keys typed before it starts skip it entirely and are kept for the menu.
+
+The splash and the ignition, successful landing and crash scenes are skippable
 with Space (or any other key except Q, which quits). The skip key is consumed;
 press the next action separately. The simulation is stopped during a scene, and
 records are saved before the landing animation. To omit the opening animation,
-set `DOOR_LL_SPLASH=0` in the profile environment. `DOOR_LL_SCENES=0` disables the
-launch and outcome scenes. These settings are independent.
+set `DOOR_SPLASH=0` (shared with the other native doors) or `DOOR_LL_SPLASH=0`
+in the profile environment. `DOOR_LL_SCENES=0` disables the launch and outcome
+scenes. These settings are independent.
 
 ### Daily calendar and date display
 

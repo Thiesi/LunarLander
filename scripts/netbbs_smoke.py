@@ -70,6 +70,14 @@ class Caller(Session):
         self.terminal_width, self.terminal_height = width, height
         self.screen.resize(width, height)
 
+    async def drawing(self, task, seconds=8):
+        """Until the door has drawn its first frame."""
+        async with asyncio.timeout(seconds):
+            while b"[" not in self.output:
+                if task.done():
+                    raise AssertionError(f"Door ended before drawing: {task.result()}")
+                await asyncio.sleep(.02)
+
     async def until(self, text, task, seconds=8):
         async with asyncio.timeout(seconds):
             while text not in "\n".join(self.screen.text_rows()):
@@ -96,7 +104,10 @@ async def check(root, captures, width, height, scenario):
             limit = 3 if scenario == "deadline" else 30
             task = asyncio.create_task(run_door(caller, lane, door, player, wall_time_limit_seconds=limit))
             tasks.append(task)
-            await caller.until("LUNAR LANDER", task)
+            # The splash's title is pixel art; its caption is the first text on screen.
+            await caller.drawing(task)
+            if scenario not in ("deadline", "disconnect"):
+                await caller.until("PRECISION FLYING", task)
             if scenario == "deadline":
                 result = await asyncio.wait_for(task, 6)
                 assert result.reason == "exited", result
@@ -142,6 +153,10 @@ async def check(root, captures, width, height, scenario):
                         other = asyncio.create_task(run_door(second, lane, door, other_player, wall_time_limit_seconds=20))
                         tasks.append(other)
                         others.append((second, other))
+                    # The splash holds until a key, as the other native doors' do.
+                    await asyncio.gather(*(session.until("PRECISION FLYING", child) for session, child in others))
+                    for session, _ in others:
+                        session.send(" ")
                     await asyncio.gather(*(session.until("FLIGHT DIRECTOR", child) for session, child in others))
                     for session, _ in others:
                         session.send("q")

@@ -203,6 +203,12 @@ NetBBS publishes the node timezone but not its date-format preference; use
 `DOOR_LL_DATE_FORMAT` rather than require an API change. The nonblocking gap is
 tracked in [NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545).
 
+The visual overhaul brings the presentation in line with the other native doors
+(Voidrunner, Retro Trivia): shaded RGB scenery with 256- and 16-color readings,
+peaked parallax ranges, a lit Earth, a gold-foil lander in three sizes with a
+flickering plume and ground dust, framed cards over a dimmed cockpit, and a
+splash that holds under its prompt until a key.
+
 Animations run at the existing 10 fps, obey host deadlines and consume their skip
 key. They never advance flight physics. Save a landing before celebrating it;
 unranked play and storage errors remain explicit. The eight-caller shipped

@@ -10,6 +10,7 @@ import argparse
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from functools import lru_cache
 import json
 import math
 import os
@@ -20,6 +21,7 @@ import select
 import signal
 import sqlite3
 import sys
+import textwrap
 import time
 import unicodedata
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -473,6 +475,12 @@ class Records:
                                (host.node, mission.key)).fetchall()
 
 
+# ---------------------------------------------------------------------------
+# Color. Text keeps the palette roles below; scenery is shaded RGB. Either kind
+# of color has a truecolor, an xterm-256 and a sixteen-color reading, so one
+# composition serves every depth the host reports.
+# ---------------------------------------------------------------------------
+
 # Palette entries are RGB, xterm-256 index, ANSI foreground code.
 COLORS = (
     ((7, 12, 25), 232, 30),       # 0 deep sky
@@ -489,15 +497,90 @@ COLORS = (
     ((196, 221, 217), 152, 97),   # 11 cloud
     ((183, 158, 235), 183, 95),  # 12 attitude / violet
 )
+PANEL, EDGE, HIGHLIGHT = 1, (104, 86, 52), (34, 48, 82)
+_CUBE = (0, 95, 135, 175, 215, 255)
 
 
-def sgr(foreground: int, background: int, depth: str) -> str:
+def rgb(color) -> tuple[int, int, int]:
+    return COLORS[color][0] if isinstance(color, int) else color
+
+
+def mix(a, b, amount: float) -> tuple[int, int, int]:
+    amount = max(0.0, min(1.0, amount))
+    return tuple(round(x + (y - x) * amount) for x, y in zip(rgb(a), rgb(b)))
+
+
+def scale(color, factor: float) -> tuple[int, int, int]:
+    return tuple(max(0, min(255, round(c * factor))) for c in rgb(color))
+
+
+def xterm256(color: tuple[int, int, int]) -> int:
+    """The nearest of the 6x6x6 cube, or of the grey ramp for a color that is grey:
+    a dark indigo is nearer a grey by distance, and the night sky went to ash that way."""
+    def nearest(value):
+        return min(range(6), key=lambda index: abs(_CUBE[index] - value))
+
+    r, g, b = (nearest(c) for c in color)
+    cube = (_CUBE[r], _CUBE[g], _CUBE[b])
+    level = max(0, min(23, round((sum(color) / 3 - 8) / 10)))
+    grey = (8 + level * 10,) * 3
+
+    def distance(other):
+        return sum((x - y) ** 2 for x, y in zip(color, other))
+
+    if max(color) - min(color) < 24 and distance(grey) < distance(cube):
+        return 232 + level
+    return 16 + 36 * r + 6 * g + b
+
+
+def ansi16(color: tuple[int, int, int]) -> int:
+    """A color's sixteen-color reading by hue family rather than distance, as
+    Voidrunner reads its splash: by distance every slate ridge, dusk band and
+    pale flame lands on the same grey."""
+    r, g, b = (c / 255 for c in color)
+    high, low = max(r, g, b), min(r, g, b)
+    if high < 0.16:
+        return 0
+    if (high - low) / high < 0.22:
+        return 15 if high > 0.85 else 7 if high > 0.5 else 8
+    if high == r:
+        hue = (60 * (g - b) / (high - low)) % 360
+    elif high == g:
+        hue = 60 * (b - r) / (high - low) + 120
+    else:
+        hue = 60 * (r - g) / (high - low) + 240
+    # Night colors -- dim or greyish slate, indigo, violet -- are greys, not
+    # blue: as blue, a whole sky and every range turns into one loud field.
+    if 190 <= hue < 300 and (high < 0.45 or (high - low) / high < 0.35):
+        return 7 if high > 0.5 else 8 if high > 0.25 else 0
+    if hue < 18 or hue >= 340:
+        return 1 + (8 if high > 0.8 else 0)
+    family = 3 if hue < 70 else 2 if hue < 160 else 6 if hue < 200 else 4 if hue < 265 else 5
+    return family + (8 if high > 0.62 else 0)
+
+
+@lru_cache(maxsize=16384)
+def _sgr_part(color, depth: str, background: bool) -> str:
+    base = 48 if background else 38
     if depth == "truecolor":
-        fg, bg = COLORS[foreground][0], COLORS[background][0]
-        return f"\x1b[38;2;{fg[0]};{fg[1]};{fg[2]};48;2;{bg[0]};{bg[1]};{bg[2]}m"
+        r, g, b = rgb(color)
+        return f"{base};2;{r};{g};{b}"
     if depth == "256":
-        return f"\x1b[38;5;{COLORS[foreground][1]};48;5;{COLORS[background][1]}m"
-    return f"\x1b[{COLORS[foreground][2]};{COLORS[background][2] + 10}m"
+        return f"{base};5;{COLORS[color][1] if isinstance(color, int) else xterm256(color)}"
+    if isinstance(color, int):
+        code = COLORS[color][2]
+    else:
+        index = ansi16(color)
+        code = 30 + index if index < 8 else 90 + index - 8
+    return str(code + 10 if background else code)
+
+
+def sgr(foreground, background, depth: str) -> str:
+    return f"\x1b[{_sgr_part(foreground, depth, False)};{_sgr_part(background, depth, True)}m"
+
+
+def _cells(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
 
 
 class Canvas:
@@ -506,11 +589,12 @@ class Canvas:
         self.width, self.height = max(1, width - 1), max(1, height)
         self.cells = [[(" ", 0, 0) for _ in range(self.width)] for _ in range(self.height)]
 
-    def put(self, x: int, y: int, char: str, fg: int = 7, bg: int = 0):
+    def put(self, x: int, y: int, char: str, fg=7, bg=0):
+        """`bg=None` keeps the color already under the cell: text over scenery."""
         if 0 <= x < self.width and 0 <= y < self.height:
-            self.cells[y][x] = (char, fg, bg)
+            self.cells[y][x] = (char, fg, self.cells[y][x][2] if bg is None else bg)
 
-    def text(self, x: int, y: int, text: str, fg: int = 7, bg: int = 0):
+    def text(self, x: int, y: int, text: str, fg=7, bg=0):
         for char in plain(text, max(0, self.width - x)):
             width = 2 if unicodedata.east_asian_width(char) in "WF" else 1
             self.put(x, y, char, fg, bg)
@@ -518,14 +602,14 @@ class Canvas:
                 self.put(x + 1, y, "", fg, bg)
             x += width
 
-    def rich(self, x: int, y: int, parts: list[tuple[str, int]], bg: int = 0, limit: int | None = None):
+    def rich(self, x: int, y: int, parts: list[tuple[str, object]], bg=0, limit: int | None = None):
         end = self.width if limit is None else min(self.width, x + limit)
         for text, color in parts:
             text = plain(text, max(0, end - x))
             self.text(x, y, text, color, bg)
-            x += sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+            x += _cells(text)
 
-    def annotated(self, x: int, y: int, text: str, bg: int = 0, limit: int | None = None):
+    def annotated(self, x: int, y: int, text: str, bg=0, limit: int | None = None):
         """Trusted menu copy: muted brackets, amber keys, ivory labels, cyan values."""
         parts, start = [], 0
         for match in re.finditer(r"\[[^\]]+\]|[+-]?\d+(?:\.\d+)?%?", text):
@@ -539,67 +623,564 @@ class Canvas:
         parts.append((text[start:], 7))
         self.rich(x, y, parts, bg, limit)
 
-    def panel(self, x: int, y: int, width: int, lines: list[str], unicode: bool = True):
-        width = min(width, self.width - x)
-        horizontal, vertical = ("─", "│") if unicode else ("-", "|")
-        for row in range(y, min(self.height, y + len(lines) + 2)):
+    def fill(self, x: int, y: int, width: int, height: int, bg=PANEL):
+        for row in range(y, y + height):
             for col in range(x, x + width):
-                self.put(col, row, " ", 7, 1)
-        self.text(x, y, "+" + horizontal * (width - 2) + "+", 5, 1)
-        for n, line in enumerate(lines, y + 1):
-            self.text(x, n, vertical, 5, 1)
-            self.annotated(x + 2, n, line, 1, width - 4)
-            self.text(x + width - 1, n, vertical, 5, 1)
-        self.text(x, y + len(lines) + 1, "+" + horizontal * (width - 2) + "+", 5, 1)
+                self.put(col, row, " ", 7, bg)
+
+    def dim(self, factor: float = 0.45):
+        """Push everything back, so a card drawn next reads as in front of it."""
+        self.cells = [[(char, scale(fg, factor), scale(bg, factor)) for char, fg, bg in row]
+                      for row in self.cells]
+
+    def shade(self, x: int, y: int, width: int, height: int, factor: float = 0.3):
+        for row in range(max(0, y), min(self.height, y + height)):
+            for col in range(max(0, x), min(self.width, x + width)):
+                char, fg, bg = self.cells[row][col]
+                self.cells[row][col] = (char, scale(fg, factor), scale(bg, factor))
+
+    def frame(self, x: int, y: int, width: int, height: int, title: str = "",
+              unicode: bool = True, accent=5):
+        """A card: soft shadow, rounded rule, its title set into the top edge."""
+        width = min(width, self.width - x)
+        tl, tr, bl, br, h, v = ("╭", "╮", "╰", "╯", "─", "│") if unicode else ("+", "+", "+", "+", "-", "|")
+        self.shade(x + width, y + 1, 1, height)
+        self.shade(x + 1, y + height, width, 1)
+        self.fill(x, y, width, height)
+        self.text(x, y, tl + h * (width - 2) + tr, EDGE, PANEL)
+        for row in range(y + 1, y + height - 1):
+            self.text(x, row, v, EDGE, PANEL)
+            self.text(x + width - 1, row, v, EDGE, PANEL)
+        self.text(x, y + height - 1, bl + h * (width - 2) + br, EDGE, PANEL)
+        if title:
+            label = plain(title, width - 8)
+            self.text(x + 2, y, "┤ " if unicode else "[ ", EDGE, PANEL)
+            self.text(x + 4, y, label, accent, PANEL)
+            self.text(x + 4 + _cells(label), y, " ├" if unicode else " ]", EDGE, PANEL)
+
+    def panel(self, x: int, y: int, width: int, lines: list[str], unicode: bool = True, accent=5):
+        """`lines[0]` titles the card; the rest is annotated body copy."""
+        width = min(width, self.width - x)
+        body = lines[1:]
+        self.frame(x, y, width, len(body) + 2, lines[0], unicode, accent)
+        for n, line in enumerate(body, y + 1):
+            self.annotated(x + 3, n, line, PANEL, width - 6)
 
 
-def paint_pixels(canvas: Canvas, pixels: dict[tuple[int, int], int], unicode: bool = True):
-    """Overlay square half-cell pixels without erasing the surrounding scenery."""
-    for x, row in sorted({(x, y // 2) for x, y in pixels}):
-        if not (0 <= x < canvas.width and 0 <= row < canvas.height):
+# ---------------------------------------------------------------------------
+# Pixels. Scenery is composed as rows of RGB pixels, two to a character cell,
+# then laid onto the canvas as half blocks (or, with ASCII glyphs, as colored
+# cells half as tall). Sprites are (x, y) -> (color, ASCII glyph) maps, so the
+# same lander can be stamped into the pixels or written as characters.
+# ---------------------------------------------------------------------------
+
+def _hash(x: int, y: int, seed: int = 0) -> float:
+    n = (x * 374761393 + y * 668265263 + seed * 982451653) & 0xFFFFFFFF
+    n = ((n ^ (n >> 13)) * 1274126177) & 0xFFFFFFFF
+    return ((n ^ (n >> 16)) & 0xFFFF) / 65535
+
+
+def _noise(x: float, y: float, seed: int) -> float:
+    """Smooth value noise in 0..1, three octaves."""
+    total = 0.0
+    for octave, weight in ((1, .6), (2, .28), (4, .12)):
+        fx, fy = x * octave, y * octave
+        xi, yi = math.floor(fx), math.floor(fy)
+        sx, sy = fx - xi, fy - yi
+        sx, sy = sx * sx * (3 - 2 * sx), sy * sy * (3 - 2 * sy)
+        a, b = _hash(xi, yi, seed + octave), _hash(xi + 1, yi, seed + octave)
+        c, d = _hash(xi, yi + 1, seed + octave), _hash(xi + 1, yi + 1, seed + octave)
+        total += weight * ((a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy)
+    return total
+
+
+def peaks(x: float, period: float, seed: int = 0) -> float:
+    """A jagged skyline in 0..1 at `x`: folded waves at three scales, so slopes
+    are straight runs between sharp summits and a lit face is one piece."""
+    total = 0.0
+    for fraction, weight, offset in ((1, .55, .13), (.41, .3, .71), (.17, .15, .37)):
+        u = x / (period * fraction) + offset + seed * .618
+        total += weight * (1 - 2 * abs(u - math.floor(u) - .5)) ** 1.4
+    return total
+
+
+def range_color(depth: int, light: float, near: bool) -> tuple[int, int, int]:
+    """A mountain pixel `depth` rows under its ridge line: a pale crest, then a
+    face lit by how squarely it turns toward the sun on the left (`light`, 0..1,
+    in quarters so a face is a few flat tones), darkening toward the foot."""
+    if depth == 0:
+        return (104, 112, 144) if near else (66, 72, 112)
+    lit, shade = ((74, 82, 112), (36, 42, 66)) if near else ((46, 52, 88), (26, 30, 54))
+    return scale(mix(shade, lit, round(light * 4) / 4), max(.74, 1 - depth * .03))
+
+
+def facing(rise: float) -> float:
+    """Light on a slope that climbs `rise` per unit to the right: faces turned
+    to the left catch the sun."""
+    return max(0.0, min(1.0, .45 + rise * 1.6))
+
+
+def sky(depth: float) -> tuple[int, int, int]:
+    """Near-black indigo overhead, a dusk violet low on the horizon."""
+    return mix((3, 5, 14), (24, 24, 54), max(0.0, depth) ** 1.7)
+
+
+def blit(canvas: Canvas, pixels: list[list[tuple]], top: int = 0, left: int = 0, unicode: bool = True):
+    for row in range(len(pixels) // 2):
+        y = top + row
+        if not 0 <= y < canvas.height:
             continue
-        char, fg, bg = canvas.cells[row][x]
-        upper = pixels.get((x, row * 2), fg if char == "▀" else bg)
-        lower = pixels.get((x, row * 2 + 1), bg)
-        if unicode:
-            canvas.put(x, row, "▀" if upper != lower else " ", upper, lower)
-        else:
-            color = pixels.get((x, row * 2), pixels.get((x, row * 2 + 1), 5))
-            canvas.put(x, row, "#" if color == 5 else "+" if color == 6 else ".", color, bg)
+        upper, lower, cells = pixels[2 * row], pixels[2 * row + 1], canvas.cells[y]
+        for x in range(min(len(upper), canvas.width - left)):
+            a, b = upper[x], lower[x]
+            if unicode:
+                cells[left + x] = (" ", 7, a) if a == b else ("▀", a, b)
+            else:
+                cells[left + x] = (" ", 7, a if a == b else mix(a, b, .5))
 
 
-def lander_pixels(angle: float, throttle: float = 0, phase: float = 0) -> dict[tuple[int, int], int]:
-    """Rotate the entire cabin, feet and exhaust in square-pixel space."""
-    a = math.radians(angle)
+def above(sprite: dict, y: int, floor: int) -> dict:
+    """The part of a sprite at pixel row `y` that is above row `floor`: a plume stops at the ground."""
+    return {(dx, dy): value for (dx, dy), value in sprite.items() if y + dy < floor}
 
-    def turn(x, y):
-        return round(x * math.cos(a) - y * math.sin(a)), round(x * math.sin(a) + y * math.cos(a))
 
-    pixels = {}
-    for p, q in (((-1, -2), (1, -2)), ((1, -2), (1, 0)), ((1, 0), (-1, 0)),
-                 ((-1, 0), (-1, -2)), ((-1, 0), (-2, 2)), ((1, 0), (2, 2)),
-                 ((-3, 2), (-1, 2)), ((1, 2), (3, 2))):
-        for n in range(13):
-            pixels[turn(p[0] + (q[0] - p[0]) * n / 12, p[1] + (q[1] - p[1]) * n / 12)] = 5
-    pixels[turn(0, -1)] = 6
+def stamp(pixels: list[list[tuple]], sprite: dict, x: int, y: int):
+    height, width = len(pixels), len(pixels[0]) if pixels else 0
+    for (dx, dy), (color, _) in sprite.items():
+        if 0 <= x + dx < width and 0 <= y + dy < height:
+            pixels[y + dy][x + dx] = color
+
+
+def overlay(canvas: Canvas, sprite: dict, x: int, y: int, top: int = 0, left: int = 0):
+    """ASCII glyphs for a sprite at pixel (x, y): a cell shows its upper pixel's glyph."""
+    cells: dict[tuple[int, int], tuple] = {}
+    for (dx, dy), value in sorted(sprite.items(), key=lambda item: -((y + item[0][1]) % 2)):
+        cells[(x + dx, (y + dy) // 2)] = value
+    for (col, row), (color, glyph) in cells.items():
+        if 0 <= col and 0 <= row:
+            canvas.put(left + col, top + row, glyph, color, None)
+
+
+# The lander, drawn a pixel per character: docking hatch, silver ascent stage
+# with its window, gold-foil descent stage, the bell, and splayed legs.
+_LANDER_SMALL = ("....h....",
+                 "...sss...",
+                 "..swWws..",
+                 "..sssss..",
+                 ".kkkkkkk.",
+                 ".GgGgGgG.",
+                 ".GGGGGGG.",
+                 ".L.nNn.L.",
+                 "L.......L")
+_LANDER_MEDIUM = (".....shs.....",
+                  "...sSSSSSs...",
+                  "..RsWwSwWsR..",
+                  "...sSSSSSs...",
+                  "..kkkkkkkkk..",
+                  ".GgGgGgGgGgG.",
+                  ".GGGGGGGGGGG.",
+                  ".Lkkk.N.kkkL.",
+                  ".L...nNn...L.",
+                  "L...........L",
+                  "PP.........PP")
+_LANDER_LARGE = ("...DDD....h..........",
+                 "....A....SSs.........",
+                 "....A..SSSSSsd.......",
+                 "....ASSSSsssssdd.....",
+                 "...RSSWWwSsssssdR....",
+                 "...RSSWWWSsssssdR....",
+                 "....SSSSSssssssdd....",
+                 "....kkkkkkkkkkkkk....",
+                 "..GGgGGGgggGgggoooo..",
+                 "..GGGgGGggggGggoooo..",
+                 "..gGGGgggGgggggoooo..",
+                 "..LkkkkkkNNNkkkkkkL..",
+                 ".L.......NNN.......L.",
+                 "L.......nNNNn.......L",
+                 "PPP...............PPP")
+LANDER_COLORS = {
+    "h": (214, 218, 228), "S": (230, 233, 240), "s": (172, 180, 196), "d": (102, 110, 130),
+    "W": (22, 32, 56), "w": (120, 226, 240), "A": (150, 156, 172), "D": (238, 240, 246),
+    "R": (92, 98, 116), "k": (40, 36, 42), "G": (248, 204, 96), "g": (214, 156, 58),
+    "o": (150, 98, 42), "L": (188, 192, 204), "P": (150, 154, 168), "N": (72, 76, 90),
+    "n": (124, 128, 142), "F": (255, 252, 236), "Y": (255, 214, 110), "O": (255, 140, 52),
+    "X": (204, 66, 42),
+}
+_LANDER_GLYPHS = {"h": "^", "S": "=", "s": "=", "d": "=", "W": "o", "w": "o", "A": "|", "D": "o",
+                  "R": "+", "k": "-", "G": "#", "g": "#", "o": "#", "P": "_", "N": "v", "n": "v",
+                  "F": "*", "Y": "*", "O": "'", "X": "."}
+_FLAME = "FYOX"
+
+
+def _sprite(rows: tuple[str, ...], ox: int, oy: int) -> dict[tuple[int, int], str]:
+    return {(x - ox, y - oy): ch for y, row in enumerate(rows) for x, ch in enumerate(row) if ch != "."}
+
+
+# Each size: its pixels about the craft's centre, the row its feet stand on,
+# the first plume row, and how long a full-throttle plume runs.
+LANDERS = {"small": (_sprite(_LANDER_SMALL, 4, 5), 3, 3, 4),
+           "medium": (_sprite(_LANDER_MEDIUM, 6, 6), 4, 3, 6),
+           "large": (_sprite(_LANDER_LARGE, 10, 8), 6, 6, 8)}
+_SUBSAMPLES = tuple((dx, dy) for dy in (-1 / 3, 0, 1 / 3) for dx in (-1 / 3, 0, 1 / 3))
+_ROLE_RANK = {role: n for n, role in enumerate("WwFYOXGgoSsdhLPNnkARD")}
+
+
+def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
+                 size: str = "small") -> dict[tuple[int, int], str]:
+    """Hull, legs and plume as roles, rotated together in square-pixel space.
+
+    Each target pixel takes the role most of its nine subsamples land on in the
+    upright sprite, so a tilted hull keeps its shape and has no holes, and a
+    symmetric hull stays mirror-symmetric when tilted."""
+    roles, _, start, reach_full = LANDERS[size]
+    roles = dict(roles)
     if throttle > 0:
-        length = 2 + round(throttle * 2) + int(phase * 10) % 2
-        for y in range(1, length + 1):
-            pixels[turn(0, y)] = 7 if y < 3 else 8
-    return pixels
+        flicker = int(phase * 20) % 3
+        length = 1 + size.count("l") + round(throttle * reach_full) + (flicker if size == "large" else flicker // 2)
+        for i in range(length):
+            heat = i / max(1, length - 1)
+            roles[(0, start + i)] = _FLAME[min(3, int(heat * 3.6))]
+            wide = heat < .55 if size != "small" else i == 0 and throttle > .55
+            if wide:
+                roles[(1, start + i)] = roles[(-1, start + i)] = _FLAME[min(3, int(heat * 3.6) + 1)]
+    if not angle:
+        return roles
+    a = math.radians(angle)
+    cos, sin = math.cos(a), math.sin(a)
+    reach = math.ceil(max(math.hypot(x, y) for x, y in roles)) + 1
+    turned = {}
+    for ty in range(-reach, reach + 1):
+        for tx in range(-reach, reach + 1):
+            votes: dict[str | None, int] = {}
+            for dx, dy in _SUBSAMPLES:
+                sx, sy = tx + dx, ty + dy
+                role = roles.get((round(sx * cos + sy * sin), round(-sx * sin + sy * cos)))
+                votes[role] = votes.get(role, 0) + 1
+            role = max(votes, key=lambda r: (votes[r], r is not None, -_ROLE_RANK.get(r, 99)))
+            if role:
+                turned[(tx, ty)] = role
+    return turned
 
 
-def draw_lander(canvas: Canvas, x: int, row: int, angle: float, throttle: float,
-                phase: float, unicode: bool, scale: int = 1):
-    pixels = {}
-    for (px, py), color in lander_pixels(angle, throttle, phase).items():
-        for dx in range(scale):
-            for dy in range(scale):
-                pixels[x + px * scale + dx, row * 2 + py * scale + dy] = color
-    paint_pixels(canvas, pixels, unicode)
+def lander_sprite(angle: float, throttle: float = 0, phase: float = 0, size: str = "small") -> dict:
+    """The lander as (color, glyph) pixels. The flight sizes are lit from the
+    left after rotation, so their shading stays put as they tilt; the large one
+    carries its own."""
+    sprite = {}
+    edge = 1 if size == "small" else 2
+    for (x, y), role in lander_roles(angle, throttle, phase, size).items():
+        color = LANDER_COLORS[role]
+        if size != "large" and role not in "Ww" + _FLAME:
+            color = scale(color, 1.14 if x < -edge else .78 if x > edge else 1)
+        glyph = ("/" if x < 0 else "\\") if role == "L" else _LANDER_GLYPHS[role]
+        sprite[(x, y)] = (color, glyph)
+    return sprite
 
 
-SCENE_SECONDS = {"splash": 3.2, "launch": 1.1, "landing": 2.4, "crash": 1.8}
+def lander_pixels(angle: float, throttle: float = 0, phase: float = 0, size: str = "small") -> dict:
+    return {point: color for point, (color, _) in lander_sprite(angle, throttle, phase, size).items()}
+
+
+def dust(strength: float, phase: float, spread: int, seed: int = 0) -> dict:
+    """Regolith thrown sideways along the ground by the plume, at ground level (y=0)."""
+    sprite = {}
+    for n in range(round(4 + 18 * strength)):
+        side = -1 if n % 2 else 1
+        reach = 2 + _hash(n, int(phase * 10), seed) * spread * (0.4 + strength)
+        lift = -int(_hash(n, int(phase * 10) + 7, seed) * (1 + 3 * strength) * (1 - reach / (spread * 1.6 + 3)))
+        color = mix((92, 92, 104), (210, 206, 200), strength * (1 - reach / (spread * 1.5 + 3)))
+        sprite[(side * round(reach), min(0, lift))] = (color, "." if lift == 0 else "'")
+    return sprite
+
+
+_HEAT = ((0.0, (34, 14, 44)), (0.22, (122, 26, 46)), (0.42, (226, 76, 36)),
+         (0.62, (255, 166, 56)), (0.82, (255, 234, 168)), (1.0, (255, 255, 255)))
+
+
+def heat(level: float) -> tuple[int, int, int]:
+    """Fire by heat, in tenths so a cooling cell changes a few times, not every frame."""
+    level = max(0.0, min(1.0, round(level * 10) / 10))
+    for (low, a), (high, b) in zip(_HEAT, _HEAT[1:]):
+        if level <= high:
+            return mix(a, b, (level - low) / (high - low))
+    return _HEAT[-1][1]
+
+
+def explosion(age: float, radius: float, seed: int = 0) -> dict:
+    """A fireball, its debris arcing out under lunar gravity, and the smoke after."""
+    sprite = {}
+    grow = 1 - (1 - min(1.0, age / .45)) ** 3
+    r = 1.5 + radius * grow
+    cool = max(0.0, 1 - age / 1.5)
+    if cool > 0:
+        for y in range(-math.ceil(r), 1):
+            for x in range(-math.ceil(r * 1.3), math.ceil(r * 1.3) + 1):
+                d = math.hypot(x / 1.3, y) / r
+                if d <= 1 and _hash(x, y, seed + int(age * 10)) > d * .35:
+                    sprite[(x, y)] = (heat((1 - d * .8) * cool), "*" if d < .5 else "+")
+    if age > .35:
+        for n in range(6):
+            puff = (age - .35) * (3 + n % 3)
+            x, y = round((n - 2.5) * 1.6 + math.sin(n + age) * 1.2), -round(r * .6 + puff + n % 2)
+            fade = max(0.0, 1 - (age - .35) / 2.2)
+            if fade > 0:
+                sprite[(x, y)] = (mix((24, 24, 34), (96, 92, 100), fade), "~")
+    for n in range(12):
+        angle = math.pi * (0.08 + 0.84 * _hash(n, 1, seed))
+        speed = radius * (1.4 + 1.6 * _hash(n, 2, seed))
+        x = math.cos(angle) * speed * age
+        y = -math.sin(angle) * speed * age + 0.5 * 9 * age * age
+        if y <= 0:
+            sprite[(round(x), round(y))] = (LANDER_COLORS["Gs"[n % 2]] if age < 1.2 else (120, 110, 90), ".")
+    return sprite
+
+
+def earth_sprite(radius: int) -> dict:
+    """The distant Earth: oceans, continents and cloud on a lit sphere, a thin
+    blue limb, and a faint halo on its sunward side (alpha in the glyph slot)."""
+    sprite = {}
+    light = (-.64, -.36, .68)
+    extent = radius + .5
+    for dy in range(-radius - 1, radius + 2):
+        for dx in range(-radius - 1, radius + 2):
+            nx, ny = dx / extent, dy / extent
+            d2 = nx * nx + ny * ny
+            if d2 <= 1:
+                z = math.sqrt(1 - d2)
+                lit = max(0.0, light[0] * nx + light[1] * ny + light[2] * z)
+                lon, lat = math.atan2(nx, z) * 1.3 + .8, ny
+                if abs(lat) > .84:
+                    base = (232, 238, 246)
+                elif _noise(lon * 1.6 + 4, lat * 2.4 + 9, 7) > .55:
+                    base = (170, 148, 96) if abs(lat) < .3 else (78, 136, 74)
+                else:
+                    base = (30, 86, 178)
+                if _noise(lon * 2.6 + 1, lat * 5, 13) > .6:
+                    base = (236, 240, 248)
+                color = mix((5, 9, 24), base, min(1.0, .05 + 1.25 * lit))
+                if z < .34 and lit > .15:
+                    color = mix(color, (140, 206, 255), (.34 - z) * 1.6)
+                sprite[(dx, dy)] = (color, 1.0)
+            elif d2 <= (1 + 1.3 / extent) ** 2 and nx * light[0] + ny * light[1] > -.1:
+                sprite[(dx, dy)] = ((40, 82, 150), .35)
+    return sprite
+
+
+@lru_cache(maxsize=4)
+def _earth(radius: int) -> tuple:
+    return tuple(earth_sprite(radius).items())
+
+
+def stamp_earth(pixels: list[list[tuple]], radius: int, x: int, y: int, under=None):
+    """Blend the Earth onto the sky; `under(px, py)` says whether a pixel is still sky."""
+    height, width = len(pixels), len(pixels[0])
+    for (dx, dy), (color, alpha) in _earth(radius):
+        px, py = x + dx, y + dy
+        if 0 <= px < width and 0 <= py < height and (under is None or under(px, py)):
+            pixels[py][px] = color if alpha >= 1 else mix(pixels[py][px], color, alpha)
+
+
+# The wordmark's pixel face: two-pixel stems, six by seven.
+_FONT = {
+    "L": ("##....", "##....", "##....", "##....", "##....", "##....", "######"),
+    "U": ("##..##", "##..##", "##..##", "##..##", "##..##", "##..##", ".####."),
+    "N": ("##..##", "###.##", "######", "##.###", "##..##", "##..##", "##..##"),
+    "A": (".####.", "##..##", "##..##", "######", "##..##", "##..##", "##..##"),
+    "R": ("#####.", "##..##", "##..##", "#####.", "##.##.", "##..##", "##..##"),
+    "D": ("#####.", "##..##", "##..##", "##..##", "##..##", "##..##", "#####."),
+    "E": ("######", "##....", "##....", "#####.", "##....", "##....", "######"),
+}
+
+
+def wordmark(words: tuple[str, ...], size: int = 1) -> dict:
+    """The title in cream-to-gold pixels, lit from the upper left, with a drop
+    shadow; at double size every other pixel row is a shade deeper, as on the banner."""
+    ink = set()
+    line_gap = 2 * size
+    for line, word in enumerate(words):
+        top = line * (7 * size + line_gap)
+        for index, letter in enumerate(word):
+            for gy, glyph_row in enumerate(_FONT[letter]):
+                for gx, mark in enumerate(glyph_row):
+                    if mark == "#":
+                        for sy in range(size):
+                            for sx in range(size):
+                                ink.add((index * 7 * size + gx * size + sx, top + gy * size + sy))
+    height = len(words) * 7 * size + (len(words) - 1) * line_gap
+    sprite = {}
+    for x, y in ink:
+        for shadow in ((x + 1, y + 1), (x + size, y + size)):
+            if shadow not in ink:
+                sprite[shadow] = ((40, 26, 58), " ")
+    for x, y in ink:
+        line_y = y % (7 * size + line_gap)
+        down = line_y / max(1, 7 * size - 1)
+        color = mix((255, 246, 222), (232, 160, 58), down)
+        if (x - 1, y) not in ink or (x, y - 1) not in ink:
+            color = mix(color, (255, 255, 240), .45)
+        elif (x + 1, y) not in ink or (x, y + 1) not in ink:
+            color = scale(color, .8)
+        if size > 1 and y % 2:
+            color = scale(color, .9)
+        sprite[(x, y)] = (color, "#")
+    return {"sprite": sprite, "width": max(x for x, _ in ink) + 1 + size, "height": height + size}
+
+
+# ---------------------------------------------------------------------------
+# The stage: the landscape every scene plays on, composed once per size.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Stage:
+    pixels: tuple
+    far: tuple
+    surface: tuple
+    pad: tuple[int, int, int]
+    earth: tuple[int, int, int]
+    stars: tuple
+
+    def sky_at(self, x: int, y: int) -> bool:
+        return y < self.far[x]
+
+
+@lru_cache(maxsize=4)
+def stage(width: int, rows: int) -> Stage:
+    """Sky, stars and the Earth over two ranges of mountains and a cratered
+    plain, with a lit pad toward the right: the banner's composition."""
+    w, h = width, rows * 2
+    rng = random.Random(1969)
+    # The ranges sit lower on the left, under the wordmark and its captions.
+    def far_at(x):
+        return h * .63 - h * .2 * peaks(x, w * .3, 7) * (.45 + .55 * x / max(1, w - 1))
+
+    def mid_at(x):
+        return h * .73 - h * .13 * peaks(x, w * .22, 11) * (.5 + .5 * x / max(1, w - 1))
+
+    far = [round(far_at(x)) for x in range(w)]
+    mid = [round(mid_at(x)) for x in range(w)]
+    far_light = [facing((far_at(x - 3) - far_at(x + 3)) / 6) for x in range(w)]
+    mid_light = [facing((mid_at(x - 3) - mid_at(x + 3)) / 6) for x in range(w)]
+    pad_c, pad_half = round(w * .72), max(13, round(w * .09))
+    pad_y = round(h * .82)
+    surface = []
+    for x in range(w):
+        bump = 1.3 * math.sin(x * .21) + .9 * math.sin(x * .067 + 1)
+        near_pad = max(0.0, 1 - max(0, abs(x - pad_c) - pad_half - 1) / 6)
+        surface.append(round(pad_y + bump * (1 - near_pad)))
+    surface = [max(m + 2, s) for m, s in zip(mid, surface)]
+    bands = [(126, 130, 148), (104, 108, 126), (84, 88, 106), (66, 70, 88), (50, 53, 70)]
+    pixels = []
+    for y in range(h):
+        row = []
+        base = sky((y // 2 * 2) / max(1, h * .6))
+        for x in range(w):
+            if y >= surface[x]:
+                depth = (y - surface[x]) / max(1, h - surface[x])
+                band = min(4, int(depth ** .8 * 5))
+                if y == surface[x]:
+                    slope = surface[min(w - 1, x + 1)] - surface[max(0, x - 1)]
+                    color = (204, 208, 218) if slope < 0 else (170, 176, 190) if slope == 0 else (122, 128, 144)
+                else:
+                    grain = _hash(x, y, 3)
+                    band = max(0, band - 1) if grain < .035 else min(4, band + 1) if grain > .965 else band
+                    color = bands[band]
+            elif y >= mid[x]:
+                color = range_color(y - mid[x], mid_light[x], True)
+            elif y >= far[x]:
+                color = range_color(y - far[x], far_light[x], False)
+            else:
+                color = base
+            row.append(color)
+        pixels.append(row)
+    # Craters on the plain: shadowed on the sunward wall, a lit rim on the far one.
+    for _ in range(max(2, w // 20)):
+        rx = rng.randint(3, max(4, w // 12))
+        cx = rng.randrange(rx, max(rx + 1, w - rx))
+        if abs(cx - pad_c) < pad_half + rx + 3:
+            continue
+        cy = rng.randint(min(h - 2, surface[cx] + 2 + rx // 3), max(surface[cx] + 2, h - 2))
+        ry = max(1, round(rx * .3))
+        for y in range(cy - ry - 1, cy + ry + 2):
+            for x in range(cx - rx - 1, cx + rx + 2):
+                if not (0 <= x < w and surface[x] < y < h):
+                    continue
+                e = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
+                if e <= 1:
+                    pixels[y][x] = scale(pixels[y][x], .5 if x < cx else .78)
+                elif e <= 1.9 and (y < cy or x > cx):
+                    pixels[y][x] = mix(pixels[y][x], (200, 204, 216), .4)
+    # Boulders, lit on the left with a shadow to the right.
+    for _ in range(w // 16):
+        x = rng.randrange(1, max(2, w - 3))
+        if abs(x - pad_c) < pad_half + 3:
+            continue
+        y = rng.randint(min(h - 1, surface[x] + 1), h - 1)
+        pixels[y][x], pixels[y][x + 1] = (190, 194, 206), (96, 100, 118)
+        pixels[y][x + 2] = scale(pixels[y][x + 2], .55)
+    # The pad: a bright plate on a dark sill, a cyan pool of light on the ground.
+    for x in range(max(0, pad_c - pad_half - 5), min(w, pad_c + pad_half + 6)):
+        glow = .22 * (1 - abs(x - pad_c) / (pad_half + 6))
+        for y in range(pad_y + 1, min(h, pad_y + 4)):
+            pixels[y][x] = mix(pixels[y][x], (60, 200, 220), glow * (1 - (y - pad_y - 1) / 3))
+    for x in range(pad_c - pad_half, pad_c + pad_half + 1):
+        if 0 <= x < w:
+            pixels[pad_y][x] = (214, 220, 232)
+            if pad_y + 1 < h:
+                pixels[pad_y + 1][x] = (96, 104, 122)
+    radius = max(4, round(h * .1))
+    earth = (round(w * .88), round(h * .17), radius)
+    stamp_earth(pixels, radius, earth[0], earth[1], lambda px, py: py < far[px])
+    stars = []
+    for n in range(w * rows // 28):
+        x, row = rng.randrange(w), rng.randrange(rows)
+        ex, ey = x - earth[0], row * 2 - earth[1]
+        if row * 2 + 1 >= far[x] - 1 or ex * ex + ey * ey <= (radius + 2) ** 2:
+            continue
+        kind = 3 if n % 23 == 0 else 2 if n % 7 == 0 else n % 2
+        stars.append((x, row, kind, rng.random()))
+    return Stage(tuple(tuple(row) for row in pixels), tuple(far), tuple(surface),
+                 (pad_c - pad_half, pad_c + pad_half, pad_y), earth, tuple(stars))
+
+
+STAR_GLYPHS = (("·", "."), (".", "."), ("+", "+"), ("*", "*"))
+STAR_COLORS = ((84, 96, 136), (132, 142, 184), (212, 222, 255), (255, 228, 186))
+
+
+def draw_stars(canvas: Canvas, stars, frame: int, unicode: bool, open_sky, top: int = 0,
+               left: int = 0, shown: float = 1.0):
+    """Stars over open sky only (`open_sky(x, row)`): the Earth, a range, the
+    lander or the wordmark keeps its cell. A few twinkle, a step dimmer, now and then."""
+    for x, row, kind, phase in stars:
+        if phase > shown or not open_sky(x, row):
+            continue
+        col, y = left + x, top + row
+        if not (0 <= col < canvas.width and 0 <= y < canvas.height):
+            continue
+        char, _, bg = canvas.cells[y][col]
+        if char != " ":
+            continue
+        twinkle = kind >= 1 and (frame + int(phase * 97)) % 37 < 3
+        color = STAR_COLORS[max(0, kind - 1) if twinkle else kind]
+        canvas.cells[y][col] = (STAR_GLYPHS[kind][0 if unicode else 1], color, bg)
+
+
+SCENE_SECONDS = {"splash": 5.0, "launch": 1.6, "landing": 2.6, "crash": 2.4}
+SCENE_MAX = (132, 50)
+SPLASH_PROMPT = "press any key to begin"
+
+
+def _ease(t: float) -> float:
+    t = max(0.0, min(1.0, t))
+    return 1 - (1 - t) ** 2
+
+
+def _span(t: float, start: float, end: float) -> float:
+    return max(0.0, min(1.0, (t - start) / (end - start)))
+
+
+def _gradient(text: str, start, end) -> list[tuple[str, tuple]]:
+    steps = max(1, len(text) - 1)
+    return [(ch, mix(start, end, i / steps)) for i, ch in enumerate(text)]
 
 
 class Display:
@@ -607,99 +1188,385 @@ class Display:
         self.host = host
         self.previous: list | None = None
         self.camera: tuple[float, float] | None = None
+        self.frame = 0
+        self._landscape: tuple | None = None
 
     def encode(self, canvas: Canvas) -> str:
-        """Only changed cell runs; no scrolling, erase or clear on ordinary frames."""
+        """Only changed cells: the cursor moves only across gaps and a color is
+        set only when it changes. No scrolling, erase or clear on ordinary frames."""
         output = []
-        if self.previous is None:
-            output.append("\x1b[2J")
+        previous = self.previous
+        if previous is None or len(previous) != len(canvas.cells) or len(previous[0]) != canvas.width:
+            previous = None
+            output.append("\x1b[0m\x1b[2J")
+        depth, style, cursor = self.host.color, None, None
         for y, row in enumerate(canvas.cells):
-            old = self.previous[y] if self.previous is not None else None
-            x = 0
-            while x < len(row):
-                if old is not None and row[x] == old[x]:
-                    x += 1
+            old = previous[y] if previous is not None else None
+            for x, cell in enumerate(row):
+                if old is not None and cell == old[x]:
                     continue
-                start = x
-                fg, bg = row[x][1:]
-                chars = []
-                while x < len(row) and row[x][1:] == (fg, bg) and (old is None or row[x] != old[x]):
-                    chars.append(row[x][0])
-                    x += 1
-                output.append(f"\x1b[{y + 1};{start + 1}H" + sgr(fg, bg, self.host.color) + "".join(chars))
+                char, fg, bg = cell
+                if char == "":
+                    continue
+                if cursor != (y, x):
+                    output.append(f"\x1b[{y + 1};{x + 1}H")
+                if style is None:
+                    output.append(sgr(fg, bg, depth))
+                    style = (fg, bg)
+                else:
+                    parts = []
+                    if char != " " and fg != style[0]:
+                        parts.append(_sgr_part(fg, depth, False))
+                    if bg != style[1]:
+                        parts.append(_sgr_part(bg, depth, True))
+                    if parts:
+                        output.append("\x1b[" + ";".join(parts) + "m")
+                    style = (fg if char != " " else style[0], bg)
+                output.append(char)
+                cursor = (y, x + (2 if unicodedata.east_asian_width(char) in "WF" else 1))
         self.previous = canvas.cells
         return "".join(output)
 
-    def scene(self, c: Canvas, kind: str, age: float, flight: Flight, record_note: str) -> Canvas:
-        width, height = c.width, c.height
-        horizon = height - 7
-        stars = random.Random(1969)
-        for _ in range(width * height // 40):
-            c.put(stars.randrange(width), stars.randrange(2, horizon), ".", 9)
-        # Layered lunar horizon; the camera is still while the scene moves.
-        for x in range(width):
-            ridge = horizon + round(math.sin(x / 13) + math.sin(x / 7))
-            for row in range(max(0, ridge), height - 3):
-                c.put(x, row, " " if self.host.unicode else "#", 2, 2 if self.host.unicode else 0)
-            c.put(x, ridge, "▀" if self.host.unicode else "_", 4, 2 if self.host.unicode else 0)
-        center = width // 2
-        pad_row = horizon + 1
-        for x in range(center - 10, center + 11):
-            c.put(x, pad_row, "═" if self.host.unicode else "=", 6)
-        title = {"splash": "LUNAR LANDER", "launch": "GO FOR DESCENT",
-                 "landing": "CONTACT LIGHT", "crash": "SIGNAL LOST"}[kind]
-        c.text(2, 0, "LUNAR LANDER / APPROACH CONTROL", 9)
-        spaced = "  ".join(title)
-        c.text(max(2, center - len(spaced) // 2), 2, spaced, 5 if kind != "crash" else 8)
-        subtitle = {"splash": "A quiet sky. A small ship. Make both feet count.",
-                    "launch": "Attitude control online / descent engine ready",
-                    "landing": "Engine stop. Welcome to the Moon.",
-                    "crash": "Telemetry lost. Flight recorder recovered."}[kind]
-        c.text(max(2, center - len(subtitle) // 2), 4, subtitle, 7)
-        progress = min(1, age / SCENE_SECONDS[kind])
+    # -- scenes --------------------------------------------------------------
+
+    def scene(self, c: Canvas, kind: str, age: float, flight: Flight, record_note: str,
+              mission: Mission | None = None) -> Canvas:
+        """The splash and the flight's three moments, played on the stage. A pure
+        function of the scene's age, at most `SCENE_MAX` and centred beyond it."""
+        unicode = self.host.unicode
+        cols, rows = min(c.width, SCENE_MAX[0]), min(c.height, SCENE_MAX[1])
+        left, top = (c.width - cols) // 2, (c.height - rows) // 2
+        st = stage(cols, rows)
+        pixels = [list(row) for row in st.pixels]
+        w, h = cols, rows * 2
+        pad_l, pad_r, pad_y = st.pad
+        pad_c = (pad_l + pad_r) // 2
+        feet = LANDERS["large"][1]
+        sprites: list[tuple[dict, int, int]] = []
+        texts: list[tuple[int, int, list]] = []
+        t = age
+        beacon_on = int(age * 2) % 2 == 0
+
         if kind == "splash":
-            x = round(center + (1 - progress) * width * .25)
-            row = round(8 + progress * (pad_row - 10))
-            draw_lander(c, x, row, -20 * (1 - progress), .7 if progress < .9 else 0, age, self.host.unicode, 2)
-            c.text(center - 14, height - 5, "NETBBS / PRECISION FLIGHT", 6)
-        elif kind == "launch":
-            draw_lander(c, center, horizon - 3 - round(progress * 2), 0, progress, age, self.host.unicode, 2)
-            c.text(center - 13, height - 5, "CHECKS " + "+ " * min(5, int(progress * 6)), 6)
-        elif kind == "landing":
-            draw_lander(c, center, pad_row - 2, flight.angle, 0, age, self.host.unicode, 2)
-            for n in range(16):
-                side = -1 if n % 2 else 1
-                x = center + side * round(4 + age * (2 + n % 6))
-                row = pad_row - int(math.sin(progress * math.pi) * (n % 3))
-                if age < 2:
-                    c.put(x, row, ".", 4 if progress < .5 else 9)
-            c.annotated(max(2, center - len(record_note) // 2), height - 5, record_note or "SAFE LANDING", limit=width - 4)
+            # Sunrise sweeps the land from the left; the stars come out first.
+            sweep = _span(t, .25, 1.4) * (w + 12) - 6
+            for y in range(h):
+                for x in range(w):
+                    if not st.sky_at(x, y) and x > sweep:
+                        pixels[y][x] = scale(pixels[y][x], .16 if x > sweep + 4 else .45)
+            # A meteor, once.
+            meteor = _span(t, .5, 1.1)
+            if 0 < meteor < 1:
+                hx, hy = round(w * (.12 + .4 * meteor)), round(h * (.06 + .18 * meteor))
+                for n in range(12):
+                    px, py = hx - n, hy - n // 2
+                    if 0 <= px < w and 0 <= py < h and st.sky_at(px, py):
+                        pixels[py][px] = mix((255, 255, 255), sky(py / (h * .6)), n / 12)
+            # The lander comes in from high on the right, braking, and settles on the pad.
+            descent = _span(t, .9, 4.2)
+            if descent > 0:
+                u = _ease(descent)
+                x = round(pad_c + (1 - u) * w * .14)
+                ground = pad_y - 1 - feet
+                y = round(-10 + u * (ground + 10))
+                burning = descent < 1
+                throttle = (.65 + .35 * _span(descent, .7, .95)) if burning else 0
+                sprites.append((above(lander_sprite(0, throttle, t, "large"), y, pad_y), x, y))
+                gap = pad_y - (y + feet)
+                if burning and gap < 16:
+                    sprites.append((dust(1 - gap / 16, t, pad_half(st)), x, pad_y - 1))
+            settle = _span(t, 4.2, 5.0)
+            if 0 < settle < 1:
+                sprites.append((dust(.6 * (1 - settle), t + 3, pad_half(st) + round(6 * settle)), pad_c, pad_y - 1))
+            if t >= 4.2:
+                beacon_on = True
+            # The wordmark resolves left to right behind a hot edge.
+            size = 2 if cols >= 120 and rows >= 40 else 1
+            mark = wordmark(("LUNAR", "LANDER"), size)
+            mx, my = max(2, round(w * .05)), max(2, round(h * .08))
+            reveal = _span(t, 1.6, 2.6) * (mark["width"] + 4)
+            if reveal > 0 and unicode:
+                shown = {}
+                for (px, py), value in mark["sprite"].items():
+                    if px <= reveal:
+                        shown[(px, py)] = ((255, 255, 255), "#") if px >= reveal - 2 and reveal < mark["width"] + 4 \
+                            and value[1] == "#" else value
+                sprites.append((shown, mx, my))
+            elif reveal > 0:
+                title = "L U N A R   L A N D E R"
+                texts.append(((my + 4) // 2, mx, _gradient(title[:round(len(title) * reveal / (mark["width"] + 4))],
+                                                             (255, 246, 222), (232, 160, 58))))
+            text_row = (my + mark["height"]) // 2 + 2
+            subtitle = "A PRECISION FLYING GAME FOR NETBBS"
+            if len(subtitle) > w - mx - 2:
+                subtitle = "PRECISION FLYING FOR NETBBS"
+            typed = round(len(subtitle) * _span(t, 2.6, 3.3))
+            if typed:
+                texts.append((text_row, mx, [(subtitle[:typed], (150, 168, 228))]))
+            if t >= 3.5:
+                chip = [("PILOT ", (179, 155, 125)), (self.host.handle, (232, 240, 255)),
+                        ("  ·  " if unicode else "  -  ", (70, 82, 120)),
+                        ("9 MISSIONS + DAILY", (179, 155, 125))]
+                texts.append((text_row + 2, mx, chip))
+            if t >= SCENE_SECONDS["splash"]:
+                texts.append((rows - 1, max(0, cols - len(SPLASH_PROMPT) - 2), [(SPLASH_PROMPT, rgb(5))]))
         else:
-            if age < .2:
-                draw_lander(c, center, pad_row - 2, flight.angle, 0, 0, self.host.unicode, 2)
-            for n in range(20):
-                angle = n * math.tau / 20
-                distance = 1 + age * (4 + n % 5)
-                x = center + round(math.cos(angle) * distance)
-                row = min(pad_row, pad_row - 2 + round(math.sin(angle) * distance / 2 + age * age))
-                c.put(x, row, "*" if age < .5 else ".", 8 if age < .5 else 5 if age < 1 else 9)
-            c.text(2, height - 5, plain(flight.reason, width - 4), 7)
-        c.annotated(center - 16, height - 2, "[SPACE] Skip scene   [Q] Quit")
+            title = {"launch": "GO FOR DESCENT", "landing": "CONTACT LIGHT", "crash": "SIGNAL LOST"}[kind]
+            subtitle = {"launch": "Attitude control online / descent engine armed",
+                        "landing": "Engine stop. Welcome to the Moon.",
+                        "crash": "Telemetry lost. Flight recorder recovered."}[kind]
+            ground = pad_y - 1 - feet
+            if kind == "launch":
+                # Ignition: a cough of sparks, then the plume steadies and the descent begins.
+                fire = _span(t, .35, .9)
+                y = round(h * .4 + _ease(_span(t, .6, 1.6)) * h * .08)
+                sprites.append((above(lander_sprite(0, .3 + .6 * fire if fire else 0, t, "large"), y, pad_y), pad_c, y))
+                checks = ("GUIDANCE", "ATTITUDE", "THROTTLE", "RANGE")
+                lit = min(len(checks), int(_span(t, .1, 1.2) * (len(checks) + 1)))
+                parts = []
+                for n, word in enumerate(checks):
+                    parts += [(("■ " if unicode else "# "), rgb(6) if n < lit else (50, 62, 92)),
+                              (word + "   ", rgb(7) if n < lit else (70, 82, 112))]
+                width = sum(_cells(text) for text, _ in parts)
+                texts.append((rows - 4, max(1, (cols - width) // 2), parts))
+                if mission is not None:
+                    name = plain(mission.name, cols - 4)
+                    texts.append((6, max(1, (cols - len(name)) // 2), [(name, rgb(9))]))
+            elif kind == "landing":
+                beacon_on = True
+                sprites.append((lander_sprite(0, 0, t, "large"), pad_c, ground))
+                if t < 2.2:
+                    sprites.append((dust(max(0.0, 1 - t / 1.6), t, pad_half(st) + round(t * 5)), pad_c, pad_y - 1))
+                note = record_note or "SAFE LANDING"
+                plain_note = plain(note, cols - 4)
+                texts.append((rows - 4, max(1, (cols - len(plain_note)) // 2), "annotated:" + plain_note))
+            else:
+                if t < .15:
+                    sprites.append((lander_sprite(flight.angle, 0, t, "large"), pad_c, ground - 3 + round(t * 20)))
+                sprites.append((explosion(max(0.0, t - .1), max(6, w // 12)), pad_c, pad_y - 1))
+                # A scorch on the ground, once the fire has passed.
+                if t > .8:
+                    for x in range(pad_c - 7, pad_c + 8):
+                        if 0 <= x < w:
+                            pixels[pad_y][x] = scale(pixels[pad_y][x], .45 + .04 * abs(x - pad_c))
+                reason = plain(flight.reason or "Lander down.", cols - 4)
+                texts.append((rows - 4, max(1, (cols - len(reason)) // 2), [(reason, rgb(7))]))
+            spaced = "  ".join(title)
+            colors = ((255, 150, 120), rgb(8)) if kind == "crash" else ((255, 244, 214), (232, 160, 58))
+            texts.append((2, max(1, (cols - len(spaced)) // 2), _gradient(spaced, *colors)))
+            texts.append((4, max(1, (cols - len(subtitle)) // 2), [(subtitle, rgb(7))]))
+            hint = "[SPACE] Skip scene   [Q] Quit"
+            texts.append((rows - 2, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
+
+        # Beacons at the pad's corners: masts with cyan lamps.
+        for x in (pad_l, pad_r):
+            if 0 <= x < w:
+                pixels[pad_y - 1][x] = (150, 156, 172)
+                pixels[pad_y - 2][x] = (130, 250, 255) if beacon_on else (36, 86, 104)
+        if unicode:
+            for sprite, x, y in sprites:
+                stamp(pixels, sprite, x, y)
+        blit(c, pixels, top, left, unicode)
+        if not unicode:
+            for sprite, x, y in sprites:
+                overlay(c, sprite, x, y, top, left)
+        shown = _span(t, 0, .8) if kind == "splash" else 1
+        captions = {row for row, _, _ in texts}
+        draw_stars(c, st.stars, self.frame, unicode,
+                   lambda x, row: row not in captions and pixels[2 * row][x] == pixels[2 * row + 1][x]
+                   == st.pixels[2 * row][x] and st.sky_at(x, 2 * row + 1), top, left, shown)
+        for row, col, parts in texts:
+            if 2 * row >= st.far[min(cols - 1, col)]:
+                length = len(parts.removeprefix("annotated:")) if isinstance(parts, str) else \
+                    sum(_cells(text) for text, _ in parts)
+                c.shade(left + col - 2, top + row, length + 4, 1, .4)
+            if isinstance(parts, str):
+                c.annotated(left + col, top + row, parts.removeprefix("annotated:"), None, cols - col - 1)
+            else:
+                c.rich(left + col, top + row, parts, None, cols - col - 1)
         return c
+
+    # -- flight --------------------------------------------------------------
 
     def draw(self, flight: Flight, mode: str = "flying", remaining: float | None = None,
              slow: bool = False, mission: Mission | None = None,
              standings: list | None = None, record_note: str = "", scene_age: float = 0,
-             clock_note: str = "") -> Canvas:
+             clock_note: str = "", catalog: tuple | None = None) -> Canvas:
         mission = mission or missions()[0]
+        self.frame += 1
         c = Canvas(self.host.width, self.host.height)
         if self.host.width < 80 or self.host.height < 24:
             c.text(0, 0, "Resize to 80x24. Q: exit", 5)
             c.text(0, 2, "Flight paused; session timer continues.", 7)
             return c
         if mode in SCENE_SECONDS:
-            return self.scene(c, mode, scene_age, flight, record_note)
+            return self.scene(c, mode, scene_age, flight, record_note, mission)
+        span = self.cockpit(c, flight, mission, remaining, slow)
+        unicode = self.host.unicode
+        if mode == "menu":
+            c.dim()
+            self.menu(c, mission, catalog or missions(), record_note, clock_note)
+            return c
+        lines, accent = None, 5
+        if mode == "paused":
+            lines = ["FLIGHT PAUSED", "", "[P] Resume flight     [?] Manual     [Q] Return",
+                     "The NetBBS session timer continues while paused."]
+        elif mode == "help":
+            lines = ["FLIGHT MANUAL / A LITTLE THRUST GOES A LONG WAY", "",
+                     "[W/S] Throttle +/-10%. Digits: [0] off to [9] full.",
+                     "[A/D] Tilt +/-10 degrees. [X] Upright. [SPACE] Cut.",
+                     "Controls stay set; you never need to hold two keys.", "",
+                     "Burn early to slow descent. Tilt against your drift.",
+                     "Watch VERTICAL: negative means falling toward the Moon.",
+                     "Land with |vertical|<=3, |drift|<=2, |tilt|<=10.",
+                     "Fuel burns only with thrust. An empty tank means coast.",
+                     "Score = difficulty x (1000 + 500 x fuel fraction",
+                     "  + 250 x (1-|V|/3) + 250 x (1-|H|/2)).",
+                     "Best per mission; tied scores rank earliest first.",
+                     "Training is unranked. Disconnect forfeits the flight.", "",
+                     "[?] or [ESC] Back    [Q] Return to NetBBS"]
+        elif mode == "debrief":
+            landed = flight.status == "landed"
+            accent = 6 if landed else 8
+            lines = ["CONTACT LIGHT / LANDED" if landed else "SIGNAL LOST / LANDER DOWN",
+                     "", flight.reason, "",
+                     f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
+                     f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", "",
+                     record_note or "Training flight / unranked", "",
+                     "[R] Retry    [M] Mission briefing    [Q] Return"]
+        elif mode == "scores":
+            lines = ["BEST PILOTS / " + mission.name, ""]
+            lines += [f"{i:2}. {plain(name, 30):30} {score:6} pts" for i, (name, score) in enumerate(standings or [], 1)]
+            if not standings:
+                lines.append(record_note or "No landings recorded for this mission yet.")
+            lines += ["", "[B] or [ESC] Back to mission briefing"]
+        if lines is not None:
+            c.dim()
+            box_width = 66
+            c.panel((c.width - box_width) // 2, max(3, (c.height - len(lines) - 1) // 2), box_width,
+                    lines, unicode, accent)
+        return c
+
+    def menu(self, c: Canvas, mission: Mission, catalog: tuple, record_note: str, clock_note: str):
+        """The flight director: every mission on a fixed grid, the chosen one briefed."""
+        unicode = self.host.unicode
+        box_w, box_h = min(76, c.width - 2), 19
+        x0, y0 = (c.width - box_w) // 2, max(1, (c.height - box_h) // 2)
+        c.frame(x0, y0, box_w, box_h, "LUNAR LANDER / FLIGHT DIRECTOR", unicode)
+        lx, rx = x0 + 3, x0 + 37
+        rw = box_w - (rx - x0) - 3
+        c.text(lx, y0 + 2, "MISSIONS", 9, PANEL)
+        c.text(rx, y0 + 2, "BRIEFING", 9, PANEL)
+        pip, empty = ("■", "·") if unicode else ("#", ".")
+        for n, entry in enumerate(catalog):
+            row, chosen = y0 + 3 + n, entry.key == mission.key
+            bg = HIGHLIGHT if chosen else PANEL
+            if chosen:
+                c.fill(lx - 1, row, 32, 1, bg)
+            pips = [("free", 9)] if not entry.difficulty else \
+                [(pip * entry.difficulty, 8 if entry.difficulty >= 4 else 5), (empty * (4 - entry.difficulty), 9)]
+            c.rich(lx, row, [("[", 9), (str(n + 1), 5), ("] ", 9),
+                             (plain(entry.name, 19), (255, 240, 200) if chosen else 7)], bg)
+            c.rich(lx + 25, row, pips, bg)
+            if chosen:
+                c.text(lx - 1, row, "►" if unicode else ">", 5, bg)
+        c.text(rx, y0 + 3, plain(mission.name, rw), 5, PANEL)
+        for n, line in enumerate(textwrap.wrap(mission.description, rw)[:3]):
+            c.text(rx, y0 + 5 + n, line, 7, PANEL)
+        stats = (("PAD", f"{mission.width:.0f} m"), ("FUEL", f"{mission.fuel:.0f} kg"),
+                 ("START", f"{mission.altitude:.0f} m"), ("DRIFT", f"{mission.drift:+.0f} m/s"))
+        for n, (label, value) in enumerate(stats):
+            c.rich(rx + (n % 2) * 18, y0 + 9 + n // 2, [(label + " ", 9), (value, 6)], PANEL)
+        for n, line in enumerate(textwrap.wrap(record_note or ("UNRANKED TRAINING" if not mission.difficulty
+                                                               else "RANKED FLIGHT"), rw)[:2]):
+            c.text(rx, y0 + 12 + n, line, 12, PANEL)
+        c.text(x0 + 1, y0 + 13, ("─" if unicode else "-") * (box_w - 2), EDGE, PANEL)
+        c.annotated(lx, y0 + 14, "[W/S] Thrust  [A/D] Tilt  [0-9] Power  [SPACE] Cut  [X] Level", PANEL, box_w - 6)
+        c.annotated(lx, y0 + 15, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
+        c.text(lx, y0 + 16, plain(clock_note, box_w - 6), 9, PANEL)
+        c.annotated(lx, y0 + 17, "[ENTER] Launch  [B] Best pilots  [?] Manual  [Q] Return", PANEL, box_w - 6)
+
+    def landscape(self, ground: Terrain, left: float, metres: float, top: float, width: int,
+                  view_h: int, large: bool) -> tuple:
+        """The still scenery for one camera position: sky, ranges, ground, the
+        Earth, the pad and the star field. The camera moves a whole pixel at a
+        time, so most frames reuse the last one."""
+        key = (ground, left, metres, top, width, view_h, large)
+        if self._landscape is not None and self._landscape[0] == key:
+            return self._landscape[1]
+        px_h = view_h * 2
+
+        def row_of(height_m: float) -> int:
+            return math.ceil((top - height_m) / metres - 1e-9)
+
+        columns = [left + x * metres for x in range(width)]
+        surface = [ground.height(wx) for wx in columns]
+        ground_row = [row_of(s) for s in surface]
+        far_row, mid_row, far_light, mid_light = [], [], [], []
+        reach, zoom = 3 * metres, metres * width / 1000
+        for x, wx in enumerate(columns):
+            # The far range drifts at a third of the camera's pace: parallax.
+            fx = left * .35 + x * metres
+            # Heights scale with the view, so a range keeps its size on screen as the camera zooms.
+            far_row.append(row_of(60 + zoom * (105 + 75 * peaks(fx, 300, 7))))
+            far_light.append(facing(zoom * 75 * (peaks(fx + reach, 300, 7) - peaks(fx - reach, 300, 7)) / (2 * reach)))
+            mid_row.append(row_of(60 + zoom * (20 + 55 * peaks(wx, 210, 11))))
+            mid_light.append(facing(zoom * 55 * (peaks(wx + reach, 210, 11) - peaks(wx - reach, 210, 11)) / (2 * reach)))
+        sky_rows = [sky(r / max(1, view_h * .9)) for r in range(view_h)]
+        bands = ((118, 124, 142), (98, 104, 122), (80, 86, 104), (64, 68, 86), (50, 53, 70))
+        pixels = []
+        for py in range(px_h):
+            world_y = top - py * metres
+            row = []
+            for x in range(width):
+                g = ground_row[x]
+                if py >= g:
+                    depth = surface[x] - world_y
+                    if py == g:
+                        slope = surface[min(width - 1, x + 1)] - surface[max(0, x - 1)]
+                        lean = slope / (2 * metres)
+                        color = (204, 210, 220) if lean > .25 else (164, 172, 186) if lean > -.25 else (118, 126, 142)
+                    else:
+                        band = 0 if depth < 6 else 1 if depth < 18 else 2 if depth < 40 else 3 if depth < 80 else 4
+                        grain = _hash(int(columns[x] / 7), int(world_y / 9), 3)
+                        band = max(0, band - 1) if grain < .035 else min(4, band + 1) if grain > .955 else band
+                        color = bands[band]
+                elif py >= mid_row[x]:
+                    color = range_color(py - mid_row[x], mid_light[x], True)
+                elif py >= far_row[x]:
+                    color = range_color(py - far_row[x], far_light[x], False)
+                else:
+                    color = sky_rows[py // 2]
+                row.append(color)
+            pixels.append(row)
+        # The Earth hangs in screen space, decoration and never collision.
+        radius = 7 if large else 5
+        stamp_earth(pixels, radius, width - radius - 6, radius + 3,
+                    lambda px, py: py < min(far_row[px], mid_row[px], ground_row[px]))
+        # The pad: a lit plate, masts with cyan lamps, a pool of light below.
+        pad = ground.pad
+        pad_left, pad_right = round((pad.left - left) / metres), round((pad.right - left) / metres)
+        pad_row = row_of(pad.height)
+        for x in range(pad_left - 4, pad_right + 5):
+            if not 0 <= x < width:
+                continue
+            if 0 <= pad_row + 1 < px_h:
+                pixels[pad_row + 1][x] = mix(pixels[pad_row + 1][x], (60, 200, 220), .12)
+            if pad_left <= x <= pad_right and 0 <= pad_row < px_h:
+                pixels[pad_row][x] = (214, 220, 232)
+        stars = random.Random(19690720)
+        field = []
+        for n in range(width * view_h // 30):
+            field.append((stars.randrange(width), stars.randrange(view_h),
+                          3 if n % 29 == 0 else 2 if n % 9 == 0 else n % 2, stars.random()))
+        result = (tuple(tuple(row) for row in pixels), ground_row, sky_rows,
+                  (pad_left, pad_right, pad_row), tuple(field))
+        self._landscape = (key, result)
+        return result
+
+    def cockpit(self, c: Canvas, flight: Flight, mission: Mission, remaining, slow) -> float:
         width, height = c.width, c.height
+        unicode = self.host.unicode
         ground = flight.terrain
         altitude = max(0, flight.y - ground.height(flight.x) - 3)
         view_y, view_h = 3, height - 10
@@ -719,125 +1586,118 @@ class Display:
         bottom = max(-20.0, flight.y - view_h * 2 * metres * .65)
         bottom = round(bottom / metres) * metres
         top = bottom + view_h * 2 * metres
-        pixels = [[0] * width for _ in range(view_h * 2)]
-        for py, row in enumerate(pixels):
-            world_y = top - py * metres
-            for px in range(width):
-                world_x = left + px * metres
-                surface = ground.height(world_x)
-                distant = 110 + 35 * math.sin(world_x / 95) + 20 * math.sin(world_x / 43)
-                if world_y <= surface:
-                    grain = (int(world_x / 7) * 73856093) ^ (int(world_y / 9) * 19349663)
-                    row[px] = 4 if world_y > surface - metres * 1.5 else 3 if grain % 19 == 0 else 2
-                elif world_y < distant:
-                    row[px] = 1
-        # Tiny stars and a shaded Earth are screen-space decoration, never collision.
-        ex, ey = width - 12, 5
-        for dy in range(-4, 5):
-            for dx in range(-4, 5):
-                if dx * dx + dy * dy <= 16 and 0 <= ey + dy < len(pixels):
-                    pixels[ey + dy][ex + dx] = 10 if dx < 1 else 2
-                    if dx < 1 and (dx + dy * 2) % 5 == 0:
-                        pixels[ey + dy][ex + dx] = 11
-        for row in range(view_h):
-            for x in range(width):
-                upper, lower = pixels[2 * row][x], pixels[2 * row + 1][x]
-                if self.host.unicode:
-                    c.put(x, view_y + row, "▀" if upper != lower else " ", upper, lower)
-                else:
-                    c.put(x, view_y + row, "#" if upper in (2, 3, 4) else "." if upper in (7, 9) else " ", upper, lower)
-        stars = random.Random(19690720)
-        for n in range(width * view_h // 45):
-            px, py = stars.randrange(width), stars.randrange(view_h)
-            if pixels[2 * py][px] == pixels[2 * py + 1][px] == 0:
-                c.put(px, view_y + py, "+" if n % 11 == 0 else ".", 7 if n % 4 == 0 else 9)
-        pad = ground.pad
-        pad_x = round(((pad.left + pad.right) / 2 - left) / metres)
-        pad_y = view_y + round((top - pad.height) / metres / 2)
-        pad_left, pad_right = round((pad.left - left) / metres), round((pad.right - left) / metres)
-        for x in range(pad_left, pad_right + 1):
-            c.put(x, pad_y, "═" if self.host.unicode else "=", 6)
-        c.text(max(0, pad_x - 3), min(view_y + view_h - 1, pad_y + 1), "[ PAD ]", 6)
-        # An enlarged navigation symbol preserves visibility at overview scale.
-        sx, sy = round((flight.x - left) / metres), view_y + round((top - flight.y) / metres / 2)
-        sy = max(view_y + 1, min(view_y + view_h - 3, sy))
+        px_h = view_h * 2
+
+        def row_of(height_m: float) -> int:
+            """The first pixel row at or below a height: where the ground starts."""
+            return math.ceil((top - height_m) / metres - 1e-9)
+
+        background, ground_row, sky_rows, (pad_left, pad_right, pad_row), field = self.landscape(
+            ground, left, metres, top, width, view_h, width >= 120 and height >= 40)
+        pixels = [list(row) for row in background]
+        lamp = (130, 250, 255) if self.frame % 10 < 6 else (40, 110, 130)
+        for x in (pad_left, pad_right):
+            for py, color in ((pad_row - 1, (150, 156, 172)), (pad_row - 2, lamp)):
+                if 0 <= x < width and 0 <= py < px_h:
+                    pixels[py][x] = color
+        # The lander stands on its feet: the sprite's foot row is the physics feet' row.
+        sx = round((flight.x - left) / metres)
+        feet_row = row_of(flight.y - 3) - 1
+        size = "medium" if width >= 120 and height >= 40 else "small"
+        sy = max(6, min(px_h - 5, feet_row - LANDERS[size][1]))
+        sprites = []
         if flight.status == "crashed":
-            c.text(sx - 2, sy, "* X *", 8)
+            sprites.append((explosion(1.6, 4, 9), sx, min(px_h - 1, row_of(ground.height(flight.x)) - 1)))
         else:
             power = flight.throttle if flight.fuel > 0 and flight.status == "flying" else 0
-            draw_lander(c, sx, sy, flight.angle, power, flight.elapsed, self.host.unicode)
-        c.text(2, 0, "L U N A R   L A N D E R", 5)
-        c.text(width - 28, 0, "FLIGHT / " + mission.name, 9)
-        c.text(2, 1, "PILOT " + self.host.handle, 7)
-        c.text(width - 28, 1, f"VIEW {span:4.0f} m  |  {flight.elapsed:5.1f}s", 6)
-        c.text(0, 2, ("─" if self.host.unicode else "-") * width, 2)
+            sprites.append(({(dx, dy): v for (dx, dy), v in lander_sprite(flight.angle, power, flight.elapsed, size).items()
+                             if not 0 <= sx + dx < width or sy + dy < ground_row[sx + dx]}, sx, sy))
+            gap_m = altitude
+            if power > 0 and gap_m < 40 and 0 <= sx < width:
+                strength = power * (1 - gap_m / 40)
+                sprites.append((dust(strength, flight.elapsed, 6 + round(8 * strength)), sx, ground_row[sx] - 1))
+        if unicode:
+            for sprite, x, y in sprites:
+                stamp(pixels, sprite, x, y)
+        blit(c, pixels, view_y, 0, unicode)
+        if not unicode:
+            for sprite, x, y in sprites:
+                overlay(c, sprite, x, y, view_y)
+        draw_stars(c, field, self.frame, unicode,
+                   lambda x, row: pixels[2 * row][x] == pixels[2 * row + 1][x] == sky_rows[row], view_y)
+        pad_label_row = view_y + (pad_row + 2) // 2
+        if view_y <= pad_label_row < view_y + view_h:
+            c.text(max(0, (pad_left + pad_right) // 2 - 1), pad_label_row, "PAD", 6, None)
+        self.instruments(c, flight, mission, altitude, span, remaining, slow)
+        return span
+
+    def instruments(self, c: Canvas, flight: Flight, mission: Mission, altitude: float, span: float,
+                    remaining, slow):
+        width, height = c.width, c.height
+        unicode = self.host.unicode
+        rule = (52, 66, 98)
+        heavy, light = ("━", "─") if unicode else ("=", "-")
+        # Header: the wordmark and the flight, on a panel strip.
+        c.fill(0, 0, width, 2)
+        c.text(0, 2, ("─" if unicode else "-") * width, rule, PANEL)
+        c.rich(2, 0, _gradient("L U N A R   L A N D E R", (255, 240, 200), (232, 160, 58)), PANEL)
+        flight_label = [("FLIGHT ", 9), (plain(mission.name, 24), 5)]
+        c.rich(width - 2 - sum(_cells(t) for t, _ in flight_label), 0, flight_label, PANEL)
+        c.rich(2, 1, [("PILOT ", 9), (self.host.handle, 7)], PANEL, width // 2)
+        view = [("VIEW ", 9), (f"{span:4.0f} m", 6), ("   T+", 9), (f"{flight.elapsed:5.1f}s", 6)]
+        c.rich(width - 2 - sum(_cells(t) for t, _ in view), 1, view, PANEL)
+        # Instruments: four gauges, the throttle, the touchdown limits and the keys.
         row = height - 7
-        c.text(0, row, ("─" if self.host.unicode else "-") * width, 2)
-        for x, title, value, color in ((2, "ALTITUDE", f"{altitude:7.1f} m", 7),
-                (2 + width // 4, "VERTICAL", f"{flight.vy:+7.1f} m/s", 8 if abs(flight.vy) > 3 else 6),
-                (2 + width // 2, "DRIFT", f"{flight.vx:+6.1f} m/s", 8 if abs(flight.vx) > 2 else 6),
-                (2 + width * 3 // 4, "FUEL", f"{flight.fuel:5.1f} kg", 8 if flight.fuel < 15 else 5)):
-            c.text(x, row + 1, title, 9)
-            c.text(x, row + 2, value, color)
-        c.rich(2, row + 3, [("THRUST ", 9), (f"{'|' * round(flight.throttle * 10):10} {flight.throttle:4.0%}", 5),
-                           ("  TILT ", 9), (f"{flight.angle:+3.0f} deg", 12)])
-        message = "LAND: |V|<=3 |H|<=2 TILT<=10"
+        c.fill(0, row, width, 7)
+        c.text(0, row, ("─" if unicode else "-") * width, rule, PANEL)
+        column = (width - 4) // 4
+        bar = column - 4
+
+        def gauge(x, fraction, color, limit=None):
+            filled = round(max(0.0, min(1.0, fraction)) * bar)
+            for n in range(bar):
+                mark = heavy if n < filled else light
+                tint = color if n < filled else (40, 52, 82)
+                if limit is not None and n == round(limit * bar):
+                    mark, tint = ("┃" if unicode else "|"), ((240, 240, 240) if n < filled else (120, 132, 160))
+                c.put(x + n, row + 3, mark, tint, PANEL)
+
+        fast, sliding, low = abs(flight.vy) > 3, abs(flight.vx) > 2, flight.fuel < 15
+        gauges = (("ALTITUDE", [(f"{altitude:7.1f} m", 7)], min(1.0, altitude / 300), (96, 140, 190), None),
+                  ("VERTICAL", [(f"{flight.vy:+7.1f} m/s", 8 if fast else 6)] + ([(" FAST", 8)] if fast else []),
+                   abs(flight.vy) / 6, rgb(8) if fast else rgb(6), .5),
+                  ("DRIFT", [(f"{flight.vx:+6.1f} m/s", 8 if sliding else 6)] + ([(" WIDE", 8)] if sliding else []),
+                   abs(flight.vx) / 4, rgb(8) if sliding else rgb(6), .5),
+                  ("FUEL", [(f"{flight.fuel:5.1f} kg", 8 if low else 5)] + ([(" LOW", 8)] if low else []),
+                   flight.fuel / max(1, flight.initial_fuel),
+                   mix(rgb(8), rgb(5), flight.fuel / max(1, flight.initial_fuel) * 2), None))
+        for n, (title, value, fraction, color, limit) in enumerate(gauges):
+            x = 2 + n * column
+            c.text(x, row + 1, title, 9, PANEL)
+            c.rich(x, row + 2, value, PANEL)
+            gauge(x, fraction, color, limit)
+        throttle = [("THRUST ", 9)]
+        for n in range(10):
+            on = n < round(flight.throttle * 10)
+            throttle.append((heavy if on else light, mix((255, 110, 40), (255, 244, 210), n / 9) if on else (40, 52, 82)))
+        throttle += [(f" {flight.throttle:4.0%}", 5), ("   TILT ", 9), (f"{flight.angle:+3.0f} deg", 12)]
+        c.rich(2, row + 4, throttle, PANEL)
+        message = None
         if remaining is not None and remaining < 60:
             message = f"SESSION ENDS IN {max(0, remaining):.0f}s"
         elif slow:
             message = "SLOW LINK: SIMULATION PACED"
-        if message.startswith("LAND:"):
-            c.rich(46, row + 3, [("LAND V<=", 9), ("3", 6), (" H<=", 9), ("2", 5), (" T<=", 9), ("10", 12)])
+        status_x = 2 + 2 * column + 2
+        if message is None:
+            c.rich(status_x, row + 4, [("LAND  V<=", 9), ("3", 6), ("  H<=", 9), ("2", 5), ("  T<=", 9), ("10", 12)], PANEL)
         else:
-            c.text(46, row + 3, message, 6)
-        c.annotated(2, row + 5, "[A/D] Tilt [W/S] Thrust [0-9] Power [SPACE] Cut [X] Level")
-        c.annotated(2, row + 6, "[P] Pause  [?] Flight manual  [Q] Quit")
-        lines = None
-        if mode == "menu":
-            lines = ["LUNAR LANDER / FLIGHT DIRECTOR", "",
-                     "[1] Training   [2] Tranquility   [3] Ridge Run",
-                     "[4] The Needle [5] Daily        [6] Copernicus",
-                     "[7] Hadley     [8] Far Side     [9] Polar Approach", "",
-                     "SELECTED: " + mission.name, mission.description,
-                     record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT"), "",
-                     "[A/D] Tilt | [W/S] Throttle | [SPACE] Cut | [X] Level",
-                     "Touchdown: |vertical|<=3 m/s |drift|<=2 |tilt|<=10", "",
-                     clock_note,
-                     "[ENTER] Launch  [B] Best pilots  [?] Manual  [Q] Return"]
-        elif mode == "paused":
-            lines = ["FLIGHT PAUSED", "", "[P] Resume flight     [?] Manual     [Q] Return",
-                     "The NetBBS session timer continues while paused."]
-        elif mode == "help":
-            lines = ["FLIGHT MANUAL / A LITTLE THRUST GOES A LONG WAY", "",
-                     "[W/S] Throttle +/-10%. Digits: [0] off to [9] full.",
-                     "[A/D] Tilt +/-10 degrees. [X] Upright. [SPACE] Cut.",
-                     "Controls stay set; you never need to hold two keys.", "",
-                     "Burn early to slow descent. Tilt against your drift.",
-                     "Watch VERTICAL: negative means falling toward the Moon.",
-                     "Land with |vertical|<=3, |drift|<=2, |tilt|<=10.",
-                     "Fuel burns only with thrust. An empty tank means coast.",
-                     "Score = difficulty x (1000 + 500 x fuel fraction",
-                     "  + 250 x (1-|V|/3) + 250 x (1-|H|/2)).",
-                     "Best per mission; tied scores rank earliest first.",
-                     "Training is unranked. Disconnect forfeits the flight.", "",
-                     "[?] or [ESC] Back    [Q] Return to NetBBS"]
-        elif mode == "debrief":
-            lines = ["CONTACT LIGHT / LANDED" if flight.status == "landed" else "SIGNAL LOST / LANDER DOWN",
-                     "", flight.reason, "",
-                     f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
-                     f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", "",
-                     record_note or "Training flight / unranked",
-                     "[R] Retry    [M] Mission briefing    [Q] Return"]
-        elif mode == "scores":
-            lines = ["BEST PILOTS / " + mission.name, ""]
-            lines += [f"{i:2}. {plain(name, 30):30} {score:6} pts" for i, (name, score) in enumerate(standings or [], 1)]
-            if not standings:
-                lines.append(record_note or "No landings recorded for this mission yet.")
-            lines += ["", "[B] or [ESC] Back to mission briefing"]
-        if lines is not None:
-            box_width = 65
-            c.panel((width - box_width) // 2, max(3, (height - len(lines) - 2) // 2), box_width, lines, self.host.unicode)
-        return c
+            c.text(status_x, row + 4, message, 8, PANEL)
+        c.annotated(2, row + 5, "[A/D] Tilt [W/S] Thrust [0-9] Power [SPACE] Cut [X] Level", PANEL)
+        c.annotated(2, row + 6, "[P] Pause  [?] Flight manual  [Q] Quit", PANEL)
+
+
+def pad_half(st: Stage) -> int:
+    return (st.pad[1] - st.pad[0]) // 2
 
 
 class Game:
@@ -943,7 +1803,8 @@ class Game:
         if self.mode in SCENE_SECONDS:
             if size_ok:
                 self.scene_age += elapsed
-                if self.scene_age >= SCENE_SECONDS[self.mode]:
+                # The splash, played out, holds under its prompt until a key.
+                if self.scene_age >= SCENE_SECONDS[self.mode] and self.mode != "splash":
                     self.finish_scene()
             return
         if self.mode != "flying" or not size_ok:
@@ -996,13 +1857,23 @@ def run(host: Host, started: float) -> int:
     if clock.warning:
         print("Lunar Lander: " + clock.warning, file=sys.stderr)
     game = Game(host, records, clock=clock, scenes=os.environ.get("DOOR_LL_SCENES") != "0",
-                splash=os.environ.get("DOOR_LL_SPLASH") != "0")
+                splash=os.environ.get("DOOR_LL_SPLASH") != "0" and os.environ.get("DOOR_SPLASH", "").strip().lower()
+                not in ("0", "off", "no", "false"))
     game.record_note = game.ranking_note()
     next_check = 0.0
     next_frame = 0.0
     last_tick = time.monotonic()
     try:
         with Terminal() as terminal:
+            data = None
+            if game.mode == "splash":
+                # Keys typed ahead belong to the game, not to skipping a title card:
+                # with any already waiting there is no splash, and every key is kept.
+                data = terminal.read(0.2)
+                if data == b"":
+                    return 0
+                if data:
+                    game.finish_scene()
             while not stopped:
                 now = time.monotonic()
                 if deadline is not None and now >= deadline:
@@ -1019,10 +1890,12 @@ def run(host: Host, started: float) -> int:
                     remaining = None if deadline is None else deadline - now
                     frame = display.draw(game.flight, game.mode, remaining, game.slow,
                                          game.mission, game.standings, game.record_note, game.scene_age,
-                                         clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30))
+                                         clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30),
+                                         game.missions)
                     terminal.write(display.encode(frame))
                     next_frame = now + .1
-                data = terminal.read()
+                if data is None:
+                    data = terminal.read()
                 if data == b"":
                     break
                 for key in keys.feed(data or b"", now):
@@ -1032,6 +1905,7 @@ def run(host: Host, started: float) -> int:
                     if game.key(key):
                         next_frame = 0
                         break
+                data = None
     finally:
         if records:
             records.close()
