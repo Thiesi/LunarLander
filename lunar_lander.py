@@ -70,6 +70,10 @@ class Host:
     event_types: tuple[str, ...] | None = None
     title_max: int = 80
     standings_rows: int = 10
+    # Unicode scenery is drawn in quadrant blocks, two pixels across a cell;
+    # DOOR_LL_PIXELS=half keeps to half blocks, one across, for fonts without quadrants.
+    pixels: str = field(default_factory=lambda: "half" if os.environ.get("DOOR_LL_PIXELS", "").strip().lower()
+                        == "half" else "quad")
 
     @property
     def ranked(self) -> bool:
@@ -847,18 +851,64 @@ def sky(depth: float) -> tuple[int, int, int]:
     return mix((3, 5, 14), (24, 24, 54), max(0.0, depth) ** 1.7)
 
 
-def blit(canvas: Canvas, pixels: list[list[tuple]], top: int = 0, left: int = 0, unicode: bool = True):
+# Quadrant glyphs by which of a cell's four pixels take the foreground color:
+# 1 upper left, 2 upper right, 4 lower left, 8 lower right.
+QUADRANTS = " ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"
+
+
+@lru_cache(maxsize=65536)
+def quadrant(a, b, c, d) -> tuple:
+    """A cell for four pixels (upper left, upper right, lower left, lower right).
+    A cell has two colors, so three or four are split into the two groups that
+    lose least, each shown as its average."""
+    quad = (a, b, c, d)
+    if len(set(quad)) <= 2:
+        mask = sum(1 << n for n, color in enumerate(quad) if color != d)
+        fg = next((color for color in quad if color != d), 7)
+        return (QUADRANTS[mask], fg, d) if mask else (" ", 7, d)
+    best = None
+    for mask in range(1, 8):  # the lower-right pixel always takes the background
+        groups = ([p for n, p in enumerate(quad) if mask >> n & 1], [p for n, p in enumerate(quad) if not mask >> n & 1])
+        means = [tuple(round(sum(p[i] for p in g) / len(g)) for i in range(3)) for g in groups]
+        loss = sum((p[i] - m[i]) ** 2 for g, m in zip(groups, means) for p in g for i in range(3))
+        if best is None or loss < best[0]:
+            best = (loss, mask, means)
+    _, mask, (fg, bg) = best
+    return (QUADRANTS[mask], fg, bg) if fg != bg else (" ", 7, bg)
+
+
+def blit(canvas: Canvas, pixels: list[list[tuple]], top: int = 0, left: int = 0, unicode: bool = True,
+         across: int = 1):
+    """Lay pixel rows onto cells, two rows to a cell and `across` (1, or 2 as
+    quadrants) pixels to a column."""
     for row in range(len(pixels) // 2):
         y = top + row
         if not 0 <= y < canvas.height:
             continue
         upper, lower, cells = pixels[2 * row], pixels[2 * row + 1], canvas.cells[y]
+        if across == 2:
+            for x in range(min(len(upper) // 2, canvas.width - left)):
+                cells[left + x] = quadrant(upper[2 * x], upper[2 * x + 1], lower[2 * x], lower[2 * x + 1])
+            continue
         for x in range(min(len(upper), canvas.width - left)):
             a, b = upper[x], lower[x]
             if unicode:
                 cells[left + x] = (" ", 7, a) if a == b else ("▀", a, b)
             else:
                 cells[left + x] = (" ", 7, a if a == b else mix(a, b, .5))
+
+
+def widen(sprite: dict, across: int) -> dict:
+    """A square-pixel sprite on pixels `across` times narrower: source column s
+    covers columns across*s .. across*s + across - 1."""
+    if across == 1:
+        return sprite
+    return {(x * across + k, y): value for (x, y), value in sprite.items() for k in range(across)}
+
+
+def _centre(x: float, across: int) -> float:
+    """Where narrow pixel column `x` sits in square-pixel units; see `widen`."""
+    return (x + .5) / across - .5
 
 
 def above(sprite: dict, y: int, floor: int) -> dict:
@@ -948,12 +998,13 @@ _ROLE_RANK = {role: n for n, role in enumerate("WwFYOXGgoSsdhLPNnkARD")}
 
 
 def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
-                 size: str = "small") -> dict[tuple[int, int], str]:
+                 size: str = "small", across: int = 1) -> dict[tuple[int, int], str]:
     """Hull, legs and plume as roles, rotated together in square-pixel space.
 
     Each target pixel takes the role most of its nine subsamples land on in the
     upright sprite, so a tilted hull keeps its shape and has no holes, and a
-    symmetric hull stays mirror-symmetric when tilted."""
+    symmetric hull stays mirror-symmetric when tilted. With `across` 2 the
+    target pixels are half as wide (quadrants), so a tilted edge steps half as far."""
     roles, _, start, reach_full = LANDERS[size]
     roles = dict(roles)
     if throttle > 0:
@@ -966,16 +1017,16 @@ def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
             if wide:
                 roles[(1, start + i)] = roles[(-1, start + i)] = _FLAME[min(3, int(heat * 3.6) + 1)]
     if not angle:
-        return roles
+        return widen(roles, across)
     a = math.radians(angle)
     cos, sin = math.cos(a), math.sin(a)
     reach = math.ceil(max(math.hypot(x, y) for x, y in roles)) + 1
     turned = {}
     for ty in range(-reach, reach + 1):
-        for tx in range(-reach, reach + 1):
+        for tx in range(-reach * across - across + 1, reach * across + across):
             votes: dict[str | None, int] = {}
             for dx, dy in _SUBSAMPLES:
-                sx, sy = tx + dx, ty + dy
+                sx, sy = _centre(tx + dx, across), ty + dy
                 role = roles.get((round(sx * cos + sy * sin), round(-sx * sin + sy * cos)))
                 votes[role] = votes.get(role, 0) + 1
             role = max(votes, key=lambda r: (votes[r], r is not None, -_ROLE_RANK.get(r, 99)))
@@ -984,16 +1035,18 @@ def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
     return turned
 
 
-def lander_sprite(angle: float, throttle: float = 0, phase: float = 0, size: str = "small") -> dict:
+def lander_sprite(angle: float, throttle: float = 0, phase: float = 0, size: str = "small",
+                  across: int = 1) -> dict:
     """The lander as (color, glyph) pixels. The flight sizes are lit from the
     left after rotation, so their shading stays put as they tilt; the large one
     carries its own."""
     sprite = {}
     edge = 1 if size == "small" else 2
-    for (x, y), role in lander_roles(angle, throttle, phase, size).items():
+    for (x, y), role in lander_roles(angle, throttle, phase, size, across).items():
         color = LANDER_COLORS[role]
         if size != "large" and role not in "Ww" + _FLAME:
-            color = scale(color, 1.14 if x < -edge else .78 if x > edge else 1)
+            u = _centre(x, across)
+            color = scale(color, 1.14 if u < -edge else .78 if u > edge else 1)
         glyph = ("/" if x < 0 else "\\") if role == "L" else _LANDER_GLYPHS[role]
         sprite[(x, y)] = (color, glyph)
     return sprite
@@ -1166,15 +1219,15 @@ def insignia(level: int, half: int, shown: float = 1.0) -> dict:
     return sprite
 
 
-def earth_sprite(radius: int) -> dict:
+def earth_sprite(radius: int, across: int = 1) -> dict:
     """The distant Earth: oceans, continents and cloud on a lit sphere, a thin
     blue limb, and a faint halo on its sunward side (alpha in the glyph slot)."""
     sprite = {}
     light = (-.64, -.36, .68)
     extent = radius + .5
     for dy in range(-radius - 1, radius + 2):
-        for dx in range(-radius - 1, radius + 2):
-            nx, ny = dx / extent, dy / extent
+        for dx in range(-(radius + 1) * across - across + 1, (radius + 1) * across + across):
+            nx, ny = _centre(dx, across) / extent, dy / extent
             d2 = nx * nx + ny * ny
             if d2 <= 1:
                 z = math.sqrt(1 - d2)
@@ -1198,14 +1251,14 @@ def earth_sprite(radius: int) -> dict:
 
 
 @lru_cache(maxsize=4)
-def _earth(radius: int) -> tuple:
-    return tuple(earth_sprite(radius).items())
+def _earth(radius: int, across: int = 1) -> tuple:
+    return tuple(earth_sprite(radius, across).items())
 
 
-def stamp_earth(pixels: list[list[tuple]], radius: int, x: int, y: int, under=None):
+def stamp_earth(pixels: list[list[tuple]], radius: int, x: int, y: int, under=None, across: int = 1):
     """Blend the Earth onto the sky; `under(px, py)` says whether a pixel is still sky."""
     height, width = len(pixels), len(pixels[0])
-    for (dx, dy), (color, alpha) in _earth(radius):
+    for (dx, dy), (color, alpha) in _earth(radius, across):
         px, py = x + dx, y + dy
         if 0 <= px < width and 0 <= py < height and (under is None or under(px, py)):
             pixels[py][px] = color if alpha >= 1 else mix(pixels[py][px], color, alpha)
@@ -1269,36 +1322,40 @@ class Stage:
     pad: tuple[int, int, int]
     earth: tuple[int, int, int]
     stars: tuple
+    across: int = 1
 
     def sky_at(self, x: int, y: int) -> bool:
         return y < self.far[x]
 
 
 @lru_cache(maxsize=4)
-def stage(width: int, rows: int) -> Stage:
+def stage(width: int, rows: int, across: int = 1) -> Stage:
     """Sky, stars and the Earth over two ranges of mountains and a cratered
-    plain, with a lit pad toward the right: the banner's composition."""
-    w, h = width, rows * 2
+    plain, with a lit pad toward the right: the banner's composition. Shapes
+    are laid out in cells; there are `across` pixels to a cell, and stars stay
+    in cells."""
+    cols, w, h = width, width * across, rows * 2
     rng = random.Random(1969)
     # The ranges sit lower on the left, under the wordmark and its captions.
     def far_at(x):
-        return h * .63 - h * .2 * peaks(x, w * .3, 7) * (.45 + .55 * x / max(1, w - 1))
+        return h * .63 - h * .2 * peaks(x, cols * .3, 7) * (.45 + .55 * x / max(1, cols - 1))
 
     def mid_at(x):
-        return h * .73 - h * .13 * peaks(x, w * .22, 11) * (.5 + .5 * x / max(1, w - 1))
+        return h * .73 - h * .13 * peaks(x, cols * .22, 11) * (.5 + .5 * x / max(1, cols - 1))
 
-    far = [round(far_at(x)) for x in range(w)]
-    mid = [round(mid_at(x)) for x in range(w)]
-    far_light = [facing((far_at(x - 3) - far_at(x + 3)) / 6) for x in range(w)]
-    mid_light = [facing((mid_at(x - 3) - mid_at(x + 3)) / 6) for x in range(w)]
-    pad_c, pad_half = round(w * .72), max(13, round(w * .09))
+    at = [_centre(x, across) for x in range(w)]
+    far = [round(far_at(u)) for u in at]
+    mid = [round(mid_at(u)) for u in at]
+    far_light = [facing((far_at(u - 3) - far_at(u + 3)) / 6) for u in at]
+    mid_light = [facing((mid_at(u - 3) - mid_at(u + 3)) / 6) for u in at]
+    pad_c, pad_half = round(cols * .72) * across, max(13, round(cols * .09)) * across
     pad_y = round(h * .82)
-    surface = []
-    for x in range(w):
-        bump = 1.3 * math.sin(x * .21) + .9 * math.sin(x * .067 + 1)
-        near_pad = max(0.0, 1 - max(0, abs(x - pad_c) - pad_half - 1) / 6)
-        surface.append(round(pad_y + bump * (1 - near_pad)))
-    surface = [max(m + 2, s) for m, s in zip(mid, surface)]
+    def ground_at(u):
+        bump = 1.3 * math.sin(u * .21) + .9 * math.sin(u * .067 + 1)
+        near_pad = max(0.0, 1 - max(0, abs(u - _centre(pad_c, across)) - pad_half / across - 1) / 6)
+        return max(round(mid_at(u)) + 2, round(pad_y + bump * (1 - near_pad)))
+
+    surface = [ground_at(u) for u in at]
     bands = [(126, 130, 148), (104, 108, 126), (84, 88, 106), (66, 70, 88), (50, 53, 70)]
     pixels = []
     for y in range(h):
@@ -1324,53 +1381,57 @@ def stage(width: int, rows: int) -> Stage:
             row.append(color)
         pixels.append(row)
     # Craters on the plain: shadowed on the sunward wall, a lit rim on the far one.
-    for _ in range(max(2, w // 20)):
-        rx = rng.randint(3, max(4, w // 12))
-        cx = rng.randrange(rx, max(rx + 1, w - rx))
-        if abs(cx - pad_c) < pad_half + rx + 3:
+    for _ in range(max(2, cols // 20)):
+        rx = rng.randint(3, max(4, cols // 12))
+        cx = rng.randrange(rx, max(rx + 1, cols - rx))
+        if abs(cx - pad_c / across) < pad_half / across + rx + 3:
             continue
-        cy = rng.randint(min(h - 2, surface[cx] + 2 + rx // 3), max(surface[cx] + 2, h - 2))
+        cy = rng.randint(min(h - 2, ground_at(cx) + 2 + rx // 3), max(ground_at(cx) + 2, h - 2))
         ry = max(1, round(rx * .3))
         for y in range(cy - ry - 1, cy + ry + 2):
-            for x in range(cx - rx - 1, cx + rx + 2):
+            for x in range((cx - rx - 1) * across, (cx + rx + 2) * across):
                 if not (0 <= x < w and surface[x] < y < h):
                     continue
-                e = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
+                e = ((at[x] - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
                 if e <= 1:
-                    pixels[y][x] = scale(pixels[y][x], .5 if x < cx else .78)
-                elif e <= 1.9 and (y < cy or x > cx):
+                    pixels[y][x] = scale(pixels[y][x], .5 if at[x] < cx else .78)
+                elif e <= 1.9 and (y < cy or at[x] > cx):
                     pixels[y][x] = mix(pixels[y][x], (200, 204, 216), .4)
     # Boulders, lit on the left with a shadow to the right.
-    for _ in range(w // 16):
-        x = rng.randrange(1, max(2, w - 3))
-        if abs(x - pad_c) < pad_half + 3:
+    for _ in range(cols // 16):
+        x = rng.randrange(1, max(2, cols - 3))
+        if abs(x - pad_c / across) < pad_half / across + 3:
             continue
-        y = rng.randint(min(h - 1, surface[x] + 1), h - 1)
-        pixels[y][x], pixels[y][x + 1] = (190, 194, 206), (96, 100, 118)
-        pixels[y][x + 2] = scale(pixels[y][x + 2], .55)
+        y = rng.randint(min(h - 1, ground_at(x) + 1), h - 1)
+        for k in range(across):
+            px = x * across + k
+            pixels[y][px], pixels[y][px + across] = (190, 194, 206), (96, 100, 118)
+            pixels[y][px + 2 * across] = scale(pixels[y][px + 2 * across], .55)
     # The pad: a bright plate on a dark sill, a cyan pool of light on the ground.
-    for x in range(max(0, pad_c - pad_half - 5), min(w, pad_c + pad_half + 6)):
-        glow = .22 * (1 - abs(x - pad_c) / (pad_half + 6))
+    for x in range(max(0, pad_c - pad_half - 5 * across), min(w, pad_c + pad_half + 6 * across)):
+        glow = .22 * (1 - abs(x - pad_c) / (pad_half + 6 * across))
         for y in range(pad_y + 1, min(h, pad_y + 4)):
             pixels[y][x] = mix(pixels[y][x], (60, 200, 220), glow * (1 - (y - pad_y - 1) / 3))
-    for x in range(pad_c - pad_half, pad_c + pad_half + 1):
+    # The plate ends on whole cells: its last cell's every pixel.
+    pad_r = pad_c + pad_half + across - 1
+    for x in range(pad_c - pad_half, pad_r + 1):
         if 0 <= x < w:
             pixels[pad_y][x] = (214, 220, 232)
             if pad_y + 1 < h:
                 pixels[pad_y + 1][x] = (96, 104, 122)
     radius = max(4, round(h * .1))
-    earth = (round(w * .88), round(h * .17), radius)
-    stamp_earth(pixels, radius, earth[0], earth[1], lambda px, py: py < far[px])
+    earth = (round(cols * .88) * across, round(h * .17), radius)
+    stamp_earth(pixels, radius, earth[0], earth[1], lambda px, py: py < far[px], across)
     stars = []
-    for n in range(w * rows // 28):
-        x, row = rng.randrange(w), rng.randrange(rows)
-        ex, ey = x - earth[0], row * 2 - earth[1]
-        if row * 2 + 1 >= far[x] - 1 or ex * ex + ey * ey <= (radius + 2) ** 2:
+    for n in range(cols * rows // 28):
+        x, row = rng.randrange(cols), rng.randrange(rows)
+        ex, ey = x - earth[0] / across, row * 2 - earth[1]
+        if row * 2 + 1 >= min(far[x * across:(x + 1) * across]) - 1 or ex * ex + ey * ey <= (radius + 2) ** 2:
             continue
         kind = 3 if n % 23 == 0 else 2 if n % 7 == 0 else n % 2
         stars.append((x, row, kind, rng.random()))
     return Stage(tuple(tuple(row) for row in pixels), tuple(far), tuple(surface),
-                 (pad_c - pad_half, pad_c + pad_half, pad_y), earth, tuple(stars))
+                 (pad_c - pad_half, pad_r, pad_y), earth, tuple(stars), across)
 
 
 STAR_GLYPHS = (("·", "."), (".", "."), ("+", "+"), ("*", "*"))
@@ -1441,6 +1502,8 @@ class Display:
         self.camera: tuple[float, float] | None = None
         self.frame = 0
         self._landscape: tuple | None = None
+        # Pixels to a cell across: quadrant blocks show two, but need Unicode.
+        self.across = 2 if host.unicode and host.pixels == "quad" else 1
 
     def encode(self, canvas: Canvas) -> str:
         """Only changed cells: the cursor moves only across gaps and a color is
@@ -1487,9 +1550,11 @@ class Display:
         unicode = self.host.unicode
         cols, rows = min(c.width, SCENE_MAX[0]), min(c.height, SCENE_MAX[1])
         left, top = (c.width - cols) // 2, (c.height - rows) // 2
-        st = stage(cols, rows)
+        # Positions below are in pixels, `across` to a cell; captions are in cells.
+        across = self.across
+        st = stage(cols, rows, across)
         pixels = [list(row) for row in st.pixels]
-        w, h = cols, rows * 2
+        w, h = cols * across, rows * 2
         pad_l, pad_r, pad_y = st.pad
         pad_c = (pad_l + pad_r) // 2
         feet = LANDERS["large"][1]
@@ -1500,19 +1565,19 @@ class Display:
 
         if kind == "splash":
             # Sunrise sweeps the land from the left; the stars come out first.
-            sweep = _span(t, .25, 1.4) * (w + 12) - 6
+            sweep = _span(t, .25, 1.4) * (w + 12 * across) - 6 * across
             for y in range(h):
                 for x in range(w):
                     if not st.sky_at(x, y) and x > sweep:
-                        pixels[y][x] = scale(pixels[y][x], .16 if x > sweep + 4 else .45)
+                        pixels[y][x] = scale(pixels[y][x], .16 if x > sweep + 4 * across else .45)
             # A meteor, once.
             meteor = _span(t, .5, 1.1)
             if 0 < meteor < 1:
                 hx, hy = round(w * (.12 + .4 * meteor)), round(h * (.06 + .18 * meteor))
-                for n in range(12):
-                    px, py = hx - n, hy - n // 2
+                for n in range(12 * across):
+                    px, py = hx - n, hy - n // (2 * across)
                     if 0 <= px < w and 0 <= py < h and st.sky_at(px, py):
-                        pixels[py][px] = mix((255, 255, 255), sky(py / (h * .6)), n / 12)
+                        pixels[py][px] = mix((255, 255, 255), sky(py / (h * .6)), n / (12 * across))
             # The lander comes in from high on the right, braking, and settles on the pad.
             descent = _span(t, .9, 4.2)
             if descent > 0:
@@ -1522,19 +1587,20 @@ class Display:
                 y = round(-10 + u * (ground + 10))
                 burning = descent < 1
                 throttle = (.65 + .35 * _span(descent, .7, .95)) if burning else 0
-                sprites.append((above(lander_sprite(0, throttle, t, "large"), y, pad_y), x, y))
+                sprites.append((above(lander_sprite(0, throttle, t, "large", across), y, pad_y), x, y))
                 gap = pad_y - (y + feet)
                 if burning and gap < 16:
-                    sprites.append((dust(1 - gap / 16, t, pad_half(st)), x, pad_y - 1))
+                    sprites.append((widen(dust(1 - gap / 16, t, pad_half(st)), across), x, pad_y - 1))
             settle = _span(t, 4.2, 5.0)
             if 0 < settle < 1:
-                sprites.append((dust(.6 * (1 - settle), t + 3, pad_half(st) + round(6 * settle)), pad_c, pad_y - 1))
+                sprites.append((widen(dust(.6 * (1 - settle), t + 3, pad_half(st) + round(6 * settle)), across),
+                                pad_c, pad_y - 1))
             if t >= 4.2:
                 beacon_on = True
             # The wordmark resolves left to right behind a hot edge.
             size = 2 if cols >= 120 and rows >= 40 else 1
             mark = wordmark(("LUNAR", "LANDER"), size)
-            mx, my = max(2, round(w * .05)), max(2, round(h * .08))
+            mx, my = max(2, round(cols * .05)), max(2, round(h * .08))
             reveal = _span(t, 1.6, 2.6) * (mark["width"] + 4)
             if reveal > 0 and unicode:
                 shown = {}
@@ -1542,14 +1608,14 @@ class Display:
                     if px <= reveal:
                         shown[(px, py)] = ((255, 255, 255), "#") if px >= reveal - 2 and reveal < mark["width"] + 4 \
                             and value[1] == "#" else value
-                sprites.append((shown, mx, my))
+                sprites.append((widen(shown, across), mx * across, my))
             elif reveal > 0:
                 title = "L U N A R   L A N D E R"
                 texts.append(((my + 4) // 2, mx, _gradient(title[:round(len(title) * reveal / (mark["width"] + 4))],
                                                              (255, 246, 222), (232, 160, 58))))
             text_row = (my + mark["height"]) // 2 + 2
             subtitle = "A PRECISION FLYING GAME FOR NETBBS"
-            if len(subtitle) > w - mx - 2:
+            if len(subtitle) > cols - mx - 2:
                 subtitle = "PRECISION FLYING FOR NETBBS"
             typed = round(len(subtitle) * _span(t, 2.6, 3.3))
             if typed:
@@ -1569,7 +1635,7 @@ class Display:
                 kind_name = award.medal or "BRONZE"
                 light, base, _ = MEDAL_COLORS[kind_name]
                 # The landscape steps back; the medal fades in, then catches the light.
-                pixels[:] = [list(row) for row in _dimmed(cols, rows)]
+                pixels[:] = [list(row) for row in _dimmed(cols, rows, across)]
                 radius = max(7, min(14, round(h * .2)))
                 cx, cy = w // 2, 6 + round(radius * .9) + radius
                 passes = 2 if kind_name == "GOLD" else 1
@@ -1578,14 +1644,14 @@ class Display:
                 appear = round(_ease(t / .8) * 5) / 5
                 sprite = {point: (mix(pixels[cy + point[1]][cx + point[0]] if 0 <= cy + point[1] < h
                                       and 0 <= cx + point[0] < w else (0, 0, 0), color, appear), glyph)
-                          for point, (color, glyph) in medal_sprite(kind_name, radius, shine).items()}
+                          for point, (color, glyph) in widen(medal_sprite(kind_name, radius, shine), across).items()}
                 sprites.append((sprite, cx, cy))
                 glints = {"GOLD": 6, "SILVER": 3}.get(kind_name, 0)
                 for n in range(glints if t > 1.4 else 0):
                     if (self.frame + n * 3) % 9 < 4:
                         angle = 2 * math.pi * _hash(n, 1, 7)
                         reach = radius * (1.2 + .3 * _hash(n, 2, 7))
-                        sprites.append((sparkle(light), cx + round(math.cos(angle) * reach),
+                        sprites.append((widen(sparkle(light), across), cx + round(math.cos(angle) * reach * across),
                                         cy + round(math.sin(angle) * reach)))
                 spaced = "  ".join(f"{kind_name} MEDAL")
                 texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, light, base)))
@@ -1596,10 +1662,11 @@ class Display:
                 texts.append((rows - 4, max(1, (cols - len(verdict)) // 2), [(verdict, light if award.improved else rgb(9))]))
             else:
                 ladder = award.career
-                sprites.append((fireworks(t, w, h, ladder.level), 0, 0))
+                sprites.append((widen(fireworks(t, cols, h, ladder.level), across), 0, 0))
                 shown = _span(t, 1.0, 1.0 + .15 * max(1, ladder.level))
                 if shown > 0:
-                    sprites.append((insignia(ladder.level, max(6, w // 11), shown), w // 2, round(h * .55)))
+                    sprites.append((widen(insignia(ladder.level, max(6, cols // 11), shown), across), w // 2,
+                                    round(h * .55)))
                 spaced = "  ".join("PROMOTED")
                 texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, (255, 244, 214), (232, 160, 58))))
                 rank = " ".join(award.promoted or ladder.rank)
@@ -1619,7 +1686,8 @@ class Display:
                 # Ignition: a cough of sparks, then the plume steadies and the descent begins.
                 fire = _span(t, .35, .9)
                 y = round(h * .4 + _ease(_span(t, .6, 1.6)) * h * .08)
-                sprites.append((above(lander_sprite(0, .3 + .6 * fire if fire else 0, t, "large"), y, pad_y), pad_c, y))
+                sprites.append((above(lander_sprite(0, .3 + .6 * fire if fire else 0, t, "large", across), y, pad_y),
+                                pad_c, y))
                 checks = ("GUIDANCE", "ATTITUDE", "THROTTLE", "RANGE")
                 lit = min(len(checks), int(_span(t, .1, 1.2) * (len(checks) + 1)))
                 parts = []
@@ -1633,21 +1701,23 @@ class Display:
                     texts.append((6, max(1, (cols - len(name)) // 2), [(name, rgb(9))]))
             elif kind == "landing":
                 beacon_on = True
-                sprites.append((lander_sprite(0, 0, t, "large"), pad_c, ground))
+                sprites.append((lander_sprite(0, 0, t, "large", across), pad_c, ground))
                 if t < 2.2:
-                    sprites.append((dust(max(0.0, 1 - t / 1.6), t, pad_half(st) + round(t * 5)), pad_c, pad_y - 1))
+                    sprites.append((widen(dust(max(0.0, 1 - t / 1.6), t, pad_half(st) + round(t * 5)), across),
+                                    pad_c, pad_y - 1))
                 note = record_note or "SAFE LANDING"
                 plain_note = plain(note, cols - 4)
                 texts.append((rows - 4, max(1, (cols - len(plain_note)) // 2), "annotated:" + plain_note))
             else:
                 if t < .15:
-                    sprites.append((lander_sprite(flight.angle, 0, t, "large"), pad_c, ground - 3 + round(t * 20)))
-                sprites.append((explosion(max(0.0, t - .1), max(6, w // 12)), pad_c, pad_y - 1))
+                    sprites.append((lander_sprite(flight.angle, 0, t, "large", across), pad_c,
+                                    ground - 3 + round(t * 20)))
+                sprites.append((widen(explosion(max(0.0, t - .1), max(6, cols // 12)), across), pad_c, pad_y - 1))
                 # A scorch on the ground, once the fire has passed.
                 if t > .8:
-                    for x in range(pad_c - 7, pad_c + 8):
+                    for x in range(pad_c - 7 * across, pad_c + 8 * across):
                         if 0 <= x < w:
-                            pixels[pad_y][x] = scale(pixels[pad_y][x], .45 + .04 * abs(x - pad_c))
+                            pixels[pad_y][x] = scale(pixels[pad_y][x], .45 + .04 * abs(x - pad_c) / across)
                 reason = plain(flight.reason or "Lander down.", cols - 4)
                 texts.append((rows - 4, max(1, (cols - len(reason)) // 2), [(reason, rgb(7))]))
             spaced = "  ".join(title)
@@ -1665,17 +1735,19 @@ class Display:
         if unicode:
             for sprite, x, y in sprites:
                 stamp(pixels, sprite, x, y)
-        blit(c, pixels, top, left, unicode)
+        blit(c, pixels, top, left, unicode, across)
         if not unicode:
             for sprite, x, y in sprites:
                 overlay(c, sprite, x, y, top, left)
         shown = _span(t, 0, .8) if kind == "splash" else 1
         captions = {row for row, _, _ in texts}
         draw_stars(c, st.stars, self.frame, unicode,
-                   lambda x, row: row not in captions and pixels[2 * row][x] == pixels[2 * row + 1][x]
-                   == st.pixels[2 * row][x] and st.sky_at(x, 2 * row + 1), top, left, shown)
+                   lambda x, row: row not in captions and all(
+                       pixels[2 * row][px] == pixels[2 * row + 1][px] == st.pixels[2 * row][px]
+                       and st.sky_at(px, 2 * row + 1) for px in range(x * across, (x + 1) * across)),
+                   top, left, shown)
         for row, col, parts in texts:
-            if 2 * row >= st.far[min(cols - 1, col)]:
+            if 2 * row >= st.far[min(w - 1, col * across)]:
                 length = len(parts.removeprefix("annotated:")) if isinstance(parts, str) else \
                     sum(_cells(text) for text, _ in parts)
                 c.shade(left + col - 2, top + row, length + 4, 1, .4)
@@ -1847,26 +1919,28 @@ class Display:
         c.annotated(lx, y0 + 18, self.back, PANEL, box_w - 6)
 
     def landscape(self, ground: Terrain, left: float, metres: float, top: float, width: int,
-                  view_h: int, large: bool) -> tuple:
+                  view_h: int, large: bool, across: int = 1) -> tuple:
         """The still scenery for one camera position: sky, ranges, ground, the
         Earth, the pad and the star field. The camera moves a whole pixel at a
-        time, so most frames reuse the last one."""
-        key = (ground, left, metres, top, width, view_h, large)
+        time, so most frames reuse the last one. `width` is in cells; there are
+        `across` pixels to a cell, each `metres / across` wide."""
+        key = (ground, left, metres, top, width, view_h, large, across)
         if self._landscape is not None and self._landscape[0] == key:
             return self._landscape[1]
         px_h = view_h * 2
+        cells, width, step = width, width * across, metres / across
 
         def row_of(height_m: float) -> int:
             return math.ceil((top - height_m) / metres - 1e-9)
 
-        columns = [left + x * metres for x in range(width)]
+        columns = [left + x * step for x in range(width)]
         surface = [ground.height(wx) for wx in columns]
         ground_row = [row_of(s) for s in surface]
         far_row, mid_row, far_light, mid_light = [], [], [], []
-        reach, zoom = 3 * metres, metres * width / 1000
+        reach, zoom = 3 * metres, metres * cells / 1000
         for x, wx in enumerate(columns):
             # The far range drifts at a third of the camera's pace: parallax.
-            fx = left * .35 + x * metres
+            fx = left * .35 + x * step
             # Heights scale with the view, so a range keeps its size on screen as the camera zooms.
             far_row.append(row_of(60 + zoom * (105 + 75 * peaks(fx, 300, 7))))
             far_light.append(facing(zoom * 75 * (peaks(fx + reach, 300, 7) - peaks(fx - reach, 300, 7)) / (2 * reach)))
@@ -1884,7 +1958,7 @@ class Display:
                     depth = surface[x] - world_y
                     if py == g:
                         slope = surface[min(width - 1, x + 1)] - surface[max(0, x - 1)]
-                        lean = slope / (2 * metres)
+                        lean = slope / (2 * step)
                         color = (204, 210, 220) if lean > .25 else (164, 172, 186) if lean > -.25 else (118, 126, 142)
                     else:
                         band = 0 if depth < 6 else 1 if depth < 18 else 2 if depth < 40 else 3 if depth < 80 else 4
@@ -1901,13 +1975,13 @@ class Display:
             pixels.append(row)
         # The Earth hangs in screen space, decoration and never collision.
         radius = 7 if large else 5
-        stamp_earth(pixels, radius, width - radius - 6, radius + 3,
-                    lambda px, py: py < min(far_row[px], mid_row[px], ground_row[px]))
+        stamp_earth(pixels, radius, (cells - radius - 6) * across, radius + 3,
+                    lambda px, py: py < min(far_row[px], mid_row[px], ground_row[px]), across)
         # The pad: a lit plate, masts with cyan lamps, a pool of light below.
         pad = ground.pad
-        pad_left, pad_right = round((pad.left - left) / metres), round((pad.right - left) / metres)
+        pad_left, pad_right = round((pad.left - left) / step), round((pad.right - left) / step)
         pad_row = row_of(pad.height)
-        for x in range(pad_left - 4, pad_right + 5):
+        for x in range(pad_left - 4 * across, pad_right + 4 * across + 1):
             if not 0 <= x < width:
                 continue
             if 0 <= pad_row + 1 < px_h:
@@ -1916,8 +1990,8 @@ class Display:
                 pixels[pad_row][x] = (214, 220, 232)
         stars = random.Random(19690720)
         field = []
-        for n in range(width * view_h // 30):
-            field.append((stars.randrange(width), stars.randrange(view_h),
+        for n in range(cells * view_h // 30):
+            field.append((stars.randrange(cells), stars.randrange(view_h),
                           3 if n % 29 == 0 else 2 if n % 9 == 0 else n % 2, stars.random()))
         result = (tuple(tuple(row) for row in pixels), ground_row, sky_rows,
                   (pad_left, pad_right, pad_row), tuple(field))
@@ -1942,52 +2016,60 @@ class Display:
         # Quantize the camera to the raster so tiny numerical changes don't shimmer.
         span = round(span / 10) * 10
         metres = span / width
-        left = round(left / metres) * metres
+        # Quadrant cells hold two pixels across, each half a cell wide.
+        across = self.across
+        step = metres / across
+        left = round(left / step) * step
         bottom = max(-20.0, flight.y - view_h * 2 * metres * .65)
         bottom = round(bottom / metres) * metres
         top = bottom + view_h * 2 * metres
-        px_h = view_h * 2
+        px_w, px_h = width * across, view_h * 2
 
         def row_of(height_m: float) -> int:
             """The first pixel row at or below a height: where the ground starts."""
             return math.ceil((top - height_m) / metres - 1e-9)
 
         background, ground_row, sky_rows, (pad_left, pad_right, pad_row), field = self.landscape(
-            ground, left, metres, top, width, view_h, width >= 120 and height >= 40)
+            ground, left, metres, top, width, view_h, width >= 120 and height >= 40, across)
         pixels = [list(row) for row in background]
         lamp = (130, 250, 255) if self.frame % 10 < 6 else (40, 110, 130)
         for x in (pad_left, pad_right):
             for py, color in ((pad_row - 1, (150, 156, 172)), (pad_row - 2, lamp)):
-                if 0 <= x < width and 0 <= py < px_h:
+                if 0 <= x < px_w and 0 <= py < px_h:
                     pixels[py][x] = color
         # The lander stands on its feet: the sprite's foot row is the physics feet' row.
-        sx = round((flight.x - left) / metres)
+        # A widened sprite's centre falls between its middle pixels: see `widen`.
+        sx = round((flight.x - left) / step - (across - 1) / 2)
         feet_row = row_of(flight.y - 3) - 1
         size = "medium" if width >= 120 and height >= 40 else "small"
         sy = max(6, min(px_h - 5, feet_row - LANDERS[size][1]))
         sprites = []
         if flight.status == "crashed":
-            sprites.append((explosion(1.6, 4, 9), sx, min(px_h - 1, row_of(ground.height(flight.x)) - 1)))
+            sprites.append((widen(explosion(1.6, 4, 9), across), sx,
+                            min(px_h - 1, row_of(ground.height(flight.x)) - 1)))
         else:
             power = flight.throttle if flight.fuel > 0 and flight.status == "flying" else 0
-            sprites.append(({(dx, dy): v for (dx, dy), v in lander_sprite(flight.angle, power, flight.elapsed, size).items()
-                             if not 0 <= sx + dx < width or sy + dy < ground_row[sx + dx]}, sx, sy))
+            craft = lander_sprite(flight.angle, power, flight.elapsed, size, across)
+            sprites.append(({(dx, dy): v for (dx, dy), v in craft.items()
+                             if not 0 <= sx + dx < px_w or sy + dy < ground_row[sx + dx]}, sx, sy))
             gap_m = altitude
-            if power > 0 and gap_m < 40 and 0 <= sx < width:
+            if power > 0 and gap_m < 40 and 0 <= sx < px_w:
                 strength = power * (1 - gap_m / 40)
-                sprites.append((dust(strength, flight.elapsed, 6 + round(8 * strength)), sx, ground_row[sx] - 1))
+                sprites.append((widen(dust(strength, flight.elapsed, 6 + round(8 * strength)), across),
+                                sx, ground_row[sx] - 1))
         if unicode:
             for sprite, x, y in sprites:
                 stamp(pixels, sprite, x, y)
-        blit(c, pixels, view_y, 0, unicode)
+        blit(c, pixels, view_y, 0, unicode, across)
         if not unicode:
             for sprite, x, y in sprites:
                 overlay(c, sprite, x, y, view_y)
         draw_stars(c, field, self.frame, unicode,
-                   lambda x, row: pixels[2 * row][x] == pixels[2 * row + 1][x] == sky_rows[row], view_y)
+                   lambda x, row: all(pixels[2 * row + r][x * across + k] == sky_rows[row]
+                                      for r in (0, 1) for k in range(across)), view_y)
         pad_label_row = view_y + (pad_row + 2) // 2
         if view_y <= pad_label_row < view_y + view_h:
-            c.text(max(0, (pad_left + pad_right) // 2 - 1), pad_label_row, "PAD", 6, None)
+            c.text(max(0, (pad_left + pad_right) // (2 * across) - 1), pad_label_row, "PAD", 6, None)
         self.instruments(c, flight, mission, altitude, span, remaining, slow)
         return span
 
@@ -2059,13 +2141,14 @@ class Display:
 
 
 @lru_cache(maxsize=2)
-def _dimmed(width: int, rows: int) -> tuple:
+def _dimmed(width: int, rows: int, across: int = 1) -> tuple:
     """The stage pushed back behind a medal."""
-    return tuple(tuple(scale(px, .4) for px in row) for row in stage(width, rows).pixels)
+    return tuple(tuple(scale(px, .4) for px in row) for row in stage(width, rows, across).pixels)
 
 
 def pad_half(st: Stage) -> int:
-    return (st.pad[1] - st.pad[0]) // 2
+    """Half the pad's width, in cells."""
+    return (st.pad[1] - st.pad[0]) // (2 * st.across)
 
 
 @dataclass(frozen=True)

@@ -90,7 +90,11 @@ For a custom registration, restrict anonymous guests: a host may give all guests
 the same account identity. LL cannot infer guest privileges from the public API.
 
 256 colors are the default local presentation; NetBBS callers get their published
-16/256/truecolor palette and Unicode preference. ASCII glyph mode still requires
+16/256/truecolor palette and Unicode preference. Unicode callers see the scenery
+in quadrant blocks (`▖▗▘▝▚▞` and kin), two pixels across each cell. Almost every
+current terminal font draws them, as does the NetBBS web terminal; for one that
+does not, set `DOOR_LL_PIXELS=half` in the profile environment to draw with half
+blocks only, as releases up to v0.1.0 did. ASCII glyph mode still requires
 ANSI cursor addressing. Plain non-ANSI terminals and classic DOS/DOOR32 launching
 are not supported in this release.
 

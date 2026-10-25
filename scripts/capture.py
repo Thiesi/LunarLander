@@ -21,8 +21,11 @@ def render_canvas(canvas):
     for y, row in enumerate(canvas.cells):
         for x, (char, fg, bg) in enumerate(row):
             draw.rectangle((x * 10, y * 20, x * 10 + 9, y * 20 + 19), fill=ll.rgb(bg))
-            if char == "▀":
-                draw.rectangle((x * 10, y * 20, x * 10 + 9, y * 20 + 9), fill=ll.rgb(fg))
+            if char in ll.QUADRANTS[1:]:
+                mask = ll.QUADRANTS.index(char)
+                for bit, (qx, qy) in enumerate(((0, 0), (5, 0), (0, 10), (5, 10))):
+                    if mask >> bit & 1:
+                        draw.rectangle((x * 10 + qx, y * 20 + qy, x * 10 + qx + 4, y * 20 + qy + 9), fill=ll.rgb(fg))
             elif char.strip():
                 draw.text((x * 10, y * 20), char, font=font, fill=ll.rgb(fg))
     return image
@@ -38,9 +41,10 @@ def main():
     parser.add_argument("--gif", action="store_true", help="Export a complete scene at 10 fps")
     parser.add_argument("--color", choices=("16", "256", "truecolor"), default="truecolor")
     parser.add_argument("--ascii", action="store_true")
+    parser.add_argument("--pixels", choices=("half", "quad"), default="quad")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    display = ll.Display(ll.Host(args.width, args.height, args.color, not args.ascii))
+    display = ll.Display(ll.Host(args.width, args.height, args.color, not args.ascii, pixels=args.pixels))
     flight = ll.training()
     flight.throttle = .7
     flight.angle = args.angle
