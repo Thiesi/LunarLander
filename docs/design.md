@@ -35,7 +35,12 @@ No emoji, font-dependent icons, blinking text or color-only warnings.
   Simulation is independent of rendering and terminal size. Slow output never
   causes an unbounded catch-up burst: cap elapsed catch-up and disclose slow play.
 - **Presentation:** 10 frames/sec, changed cell runs only after the first frame;
-  UTF-8 half-block terrain at two vertical samples per row. 256-color palette
+  UTF-8 quadrant-block scenery at two samples across and two down per cell (half
+  blocks, one across, when `DOOR_LL_PIXELS=half`); a cell holds two colors, so
+  three or four meeting in one are split into the two groups that lose least.
+  The landers and the wordmark have fine art two across; medal, chevrons, star,
+  sparkle and fire are drawn on the narrow grid; particles stay square but move
+  in half-cell steps. 256-color palette
   with truecolor enhancement and 16-color mapping. ASCII glyph preference keeps
   ANSI cursor movement and readable terrain. An ANSI-free real-time version and
   classic DOOR32/DOS support are deferred; explain unsupported terminals clearly.
