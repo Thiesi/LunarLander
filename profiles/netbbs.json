@@ -15,6 +15,6 @@
     "cpu_seconds": 900,
     "max_sessions": 8,
     "multinode_certified": true,
-    "environment": {"DOOR_LL_DATA_DIR": "/var/games/netbbs/lunar-lander/data"}
+    "environment": {"DOOR_LL_DATA_DIR": "/srv/bbs/netbbs.db.doors/lunar_lander"}
   }
 }
