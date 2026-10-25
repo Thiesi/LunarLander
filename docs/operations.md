@@ -50,14 +50,33 @@ releases keep what they earned and no migration is needed. The dailies show
 today's medals but do not count toward rank. Callers without a NetBBS
 identity earn medals for the session only.
 
-Ranked flights also count toward 44 achievements: milestones (landings, time in
-the air, crashes), precision and close-call landings, nine hidden spectacular
-crashes, and career feats from bests (chapters landed and gold, the top rank,
+Ranked flights also count toward 50 achievements: milestones (landings, time in
+the air, crashes, simulator time), precision and close-call landings, nine
+hidden spectacular crashes, completed Programs, and career feats from bests (chapters landed and gold, the top rank,
 all three dailies in a day, daily streaks). Achievements that bests already earn
 are awarded quietly the first time a pilot launches this release. The debrief
 names what a flight earned; silver and gold ones are announced through NetBBS
 game events when those are on. The training basin counts as simulator time, not
 as ranked flying.
+
+**Programs** (the PROGRAM tab) need a pilot record. A season is the node-local
+month: everyone flies the same five to eight missions, generated like the
+dailies and climbing from the Maria to the Frontier span, and a new month brings
+new ones; a program already under way keeps its season. [N] starts a program
+with a preset: Cadet (any number of simulator runs; a crash loses that mission
+and the program goes on), Astronaut (one simulator run per mission; a crash
+ends the program) or Test Pilot (no simulator; a crash ends it). On the next
+mission, [S] flies the simulator and [Enter] the real flight, after a
+confirmation. The real flight keeps the simulator's terrain and pad but starts
+a little differently (drift within 15%, start within 10 m, up to 3 kg less fuel,
+sink within 0.5 m/s), drawn at launch. The attempt is recorded before it
+launches, so leaving or losing the connection mid-flight counts as a crash.
+Program flights count toward landings, crashes and achievements but never
+toward bests, medals or rank. [B] shows the season's board per preset: each
+pilot's best program by missions landed, then points (Cadet's also shows
+missions lost). A completed program is announced as an `achievement` game
+event; the node's first program of a season as a `season` event, but only to a
+NetBBS that lists that type.
 The dailies change at midnight in the node's published IANA timezone,
 including daylight-saving transitions. Everyone gets the same three flights for
 a given calendar date, on every node; each has its own leaderboard for the day. An active

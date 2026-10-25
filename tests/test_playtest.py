@@ -28,7 +28,8 @@ class DailyTests(unittest.TestCase):
         clock = ll.DailyClock("Europe/Berlin", "%d.%m.%Y", now=lambda: now[0])
         self.assertFalse(clock.warning)
         game = ll.Game(clock=clock)
-        game.key("left")  # the chapter tabs wrap round to DAILY
+        game.key("left")  # the chapter tabs wrap round to PROGRAM, then DAILY
+        game.key("left")
         self.assertEqual(game.mission.name, "MARIA 24.10.2026")
         game.key("down")  # the same place on the tab survives midnight
         self.assertEqual(game.mission.name, "HIGHLANDS 24.10.2026")
@@ -112,6 +113,8 @@ class PresentationTests(unittest.TestCase):
     def test_menu_missions_share_one_grid(self):
         brackets, pips = set(), set()
         for n, chapter in enumerate(ll.CHAPTERS):
+            if chapter.key == "program":
+                continue  # its list shows each mission's state instead; see test_programs
             with self.subTest(chapter=chapter.key):
                 shelf = ll.chapter_missions(chapter, ll.missions())
                 canvas = ll.Display(ll.Host()).draw(ll.training(), "menu", mission=shelf[-1],
