@@ -1,8 +1,28 @@
 # Release acceptance
 
-Target: `v0.2.1`. It is not a claim that every NetBBS transport or target
+Target: `v0.3.0`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.3.0: classic BBS hosts, the node's date, cleaner cards
+
+- 108 tests (unittest and pytest collect the same suite), Windows / Python
+  3.14.7 with development-only tzdata. Added: DOOR32.SYS and DOOR.SYS parsing
+  (both formats, renamed and malformed files, sanitised names, plain terminals),
+  classic hosts' identity, limits, settings and error messages, every screen
+  reaching CP437 without loss, the DOOR32 socket link over a socketpair (telnet
+  filtering, CR NUL and CR LF, IAC doubling, carrier loss), two real-process
+  classic launches (DOOR32.SYS over stdio in CP437, and a plain terminal told it
+  needs ANSI), the date part of nine node date formats and its precedence, cards
+  clearing the gauges they cover at 80x24, and the leaderboard marking the
+  viewer's own row.
+- Hosted CI, with the real NetBBS 7.40.0 runtime on Linux and Windows, passed on
+  each change as rebased onto the one before it, and on the release commit.
+  Locally, the timing-sensitive process tests and the NetBBS smoke test's
+  3-second deadline scenario timed out on `main` and on the changes alike while
+  the development machine was saturated by unrelated processes; the rest passed.
+- Classic BBS support has not met a real Synchronet, Mystic or ENiGMA½ install;
+  that check is listed below.
 
 ## v0.2.1: CP437 callers and documentation
 
