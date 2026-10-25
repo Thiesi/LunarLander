@@ -54,6 +54,16 @@ score per pilot per mission; equal scores keep the earlier achieved result.
 
 ## Native NetBBS installation
 
+On NetBBS v7.41.0 or later, Lunar Lander is bundled: **Content ▸ Doors ▸
+<kbd>G</kbd> Gallery** lists it with the other bundled games, and registering it
+from there is all the installation it needs. The bundled registration gets the
+900-second CPU allowance and keeps records in `<db>.doors/lunar_lander/`, where
+the node's backups include them. NetBBS updates the bundled copy with its own
+releases, which may trail this repository's.
+
+To run a release newer than the bundled copy, or on an older NetBBS, register it
+by hand:
+
 1. Download `lunar_lander.py`, `netbbs.json`, `LICENSE` and `SHA256SUMS` from the
    same tagged release. Verify the checksums before installation. Candidate
    (`-rc`) releases are for testing; ACCEPTANCE.md lists the checks still open.
@@ -118,14 +128,15 @@ an invalid zone or unavailable system timezone database produces a visible warni
 and a bounded stderr diagnostic before falling back to UTC. Install the operating
 system's timezone data to use named zones. The briefing shows the reset timezone.
 
-NetBBS's current door API does not publish the node's date-format preference.
-Set `DOOR_LL_DATE_FORMAT` in the profile environment to match it, for example
-`%d.%m.%Y`, `%d/%m/%Y` or `%m/%d/%Y`; the default is `%Y-%m-%d`.
+Set `DOOR_LL_DATE_FORMAT` in the profile environment to match the node's date
+format, for example `%d.%m.%Y`, `%d/%m/%Y` or `%m/%d/%Y`; the default is `%Y-%m-%d`.
 Allowed directives are `%Y`, `%y`, `%m`, `%d`, `%b`, `%B`, `%a`, `%A`, with spaces,
 dots, slashes, commas and hyphens (maximum 32 characters). Month/day names follow
 the process locale. Invalid formats visibly fall back to ISO dates. Date formatting
-never changes the challenge seed or stored record keys. The missing API field is
-tracked in [NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545).
+never changes the challenge seed or stored record keys. Since v7.41.0, NetBBS also
+publishes the node's timestamp format to doors as `datetime_format`
+([NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545)); this release does
+not read it yet, so the profile setting is still the way to match the node.
 
 NetBBS forwards size changes via republished JSON and SIGUSR1. LL also
 polls metadata to coalesce notifications.
@@ -136,9 +147,11 @@ and exits just before the published deadline. Disconnect forfeits the active fli
 ## Records, backups and upgrades
 
 The database is `pilots.db` under `DOOR_LL_DATA_DIR`, or under `data` next to the
-script if no override is configured. Always set an explicit writable directory in
-the profile; an installed package directory may be read-only. NetBBS forwards
-profile `DOOR_*` variables, not arbitrary process environment variables.
+script if no override is configured. The bundled registration sets it to
+`<db>.doors/lunar_lander/`. For a registration by hand, always set an explicit
+writable directory in the profile; an installed package directory may be
+read-only. NetBBS forwards profile `DOOR_*` variables, not arbitrary process
+environment variables.
 
 Records use the opaque node ID, stable numeric account ID and mission ID. A handle
 rename updates the displayed name on the next leaderboard read or saved landing.
@@ -151,8 +164,15 @@ database is refused and preserved. LL says records are unavailable, offers unran
 play and writes a bounded stderr diagnostic for NetBBS's door-session history.
 A write failure on touchdown clearly says the landing was not saved.
 
-These records are **not automatically included in NetBBS's bundled-door backups**.
-Before upgrades, close admission, let callers return and back up `pilots.db` with
+A bundled Lunar Lander's records **are included in NetBBS's backups**:
+`python -m netbbs.backup` takes a checked snapshot of `pilots.db`, a restore puts
+it back, and damaged or foreign records stop the backup with a message naming the
+file. To move a registration by hand onto the bundled door, move its `pilots.db`
+to `<db>.doors/lunar_lander/` and remove the hand-made registration.
+
+Records anywhere else, in a hand registration's `DOOR_LL_DATA_DIR` or a profile
+that points the bundled door elsewhere, are **not backed up by NetBBS**. Before
+upgrades, close admission, let callers return and back up `pilots.db` with
 SQLite's backup API. This also works for a consistent snapshot while readers exist:
 
 ```python
