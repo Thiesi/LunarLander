@@ -809,6 +809,207 @@ def career(bests: dict[str, int], catalog: tuple[Mission, ...]) -> Career:
                   sum(1 for m in medals if m), medals.count("GOLD"), len(ranked))
 
 
+# ---------------------------------------------------------------------------
+# Achievements. Each is data: a key, a name, a tier (as medals), its group on
+# the Pilot Record and a hint; a hidden one shows as "???" until earned. They
+# are judged from a finished flight, a pilot's running counters and their
+# bests, so those from bests can be awarded to records that predate them.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Achievement:
+    key: str
+    name: str
+    tier: str
+    group: str
+    hint: str
+    hidden: bool = False
+
+
+# Hidden until earned: every spectacular crash, and one close call.
+_CATALOGUE = (
+    ("MILESTONES", (
+        ("land-1", "First Contact", "BRONZE", "Land safely once"),
+        ("land-10", "Ten Down", "BRONZE", "Land safely 10 times"),
+        ("land-25", "Regular", "BRONZE", "Land safely 25 times"),
+        ("land-50", "Half Century", "SILVER", "Land safely 50 times"),
+        ("land-100", "Centurion", "SILVER", "Land safely 100 times"),
+        ("land-250", "Veteran", "GOLD", "Land safely 250 times"),
+        ("land-500", "Lunar Commuter", "GOLD", "Land safely 500 times"),
+        ("air-1h", "Hour in the Black", "BRONZE", "Fly an hour of ranked missions"),
+        ("air-5h", "Long Haul", "SILVER", "Fly five hours of ranked missions"),
+        ("air-24h", "A Day on the Moon", "GOLD", "Fly a whole day of ranked missions"),
+        ("crash-10", "Learning Curve", "BRONZE", "Crash 10 times"),
+        ("crash-50", "Crash Test Pilot", "SILVER", "Crash 50 times"))),
+    ("PRECISION", (
+        ("feather", "Feather", "SILVER", "Touch down under 0.3 m/s"),
+        ("no-drift", "No Drift", "SILVER", "Touch down with drift under 0.1 m/s"),
+        ("dead-centre", "Dead Centre", "SILVER", "Land within 1 m of the pad's centre"),
+        ("perfect", "Textbook", "GOLD", "Feather, No Drift and Dead Centre"),
+        ("fuel-miser", "Fuel Miser", "SILVER", "Land with three quarters of the tank"))),
+    ("CLOSE CALLS", (
+        ("fumes", "Running on Fumes", "SILVER", "Land with under 1 kg of fuel"),
+        ("by-the-book", "By the Book", "BRONZE", "Land at 2.9 m/s or more"),
+        ("shuffle", "Sideways Shuffle", "BRONZE", "Land drifting 1.9 m/s or more"),
+        ("leaning-in", "Leaning In", "BRONZE", "Land tilted 10 degrees"),
+        ("edge", "Edge of the Pad", "BRONZE", "Land a foot within 0.5 m of the edge"),
+        ("every-limit", "Squeaker", "GOLD", "Brush every limit in one landing"))),
+    ("SPECTACULAR CRASHES", (
+        ("lithobraking", "Lithobraking", "BRONZE", "Hit the ground faster than 30 m/s"),
+        ("meteorite", "Meteorite", "SILVER", "Hit the ground faster than 60 m/s"),
+        ("wrong-crater", "Wrong Crater", "BRONZE", "Crash over 300 m from the pad"),
+        ("full-tank", "Full Tank", "BRONZE", "Crash without burning any fuel"),
+        ("dead-stick", "Dead Stick", "BRONZE", "Crash with an empty tank"),
+        ("so-close", "So Close", "BRONZE", "Crash on the pad, just over 3 m/s"),
+        ("tipping-point", "Tipping Point", "BRONZE", "Crash tilted 50 degrees or more"),
+        ("off-the-map", "Off the Map", "BRONZE", "Leave the flight corridor"))),
+    ("CAREER", (
+        ("first-gold", "First Gold", "BRONZE", "Win a gold medal"),
+        ("maria-landed", "Sea Legs", "BRONZE", "Land every Maria mission"),
+        ("highlands-landed", "Hill Climber", "SILVER", "Land every Highlands mission"),
+        ("frontier-landed", "Frontiersman", "GOLD", "Land every Frontier mission"),
+        ("maria-gold", "Mare Nostrum", "SILVER", "Gold on every Maria mission"),
+        ("highlands-gold", "High Ground", "GOLD", "Gold on every Highlands mission"),
+        ("frontier-gold", "Far and Away", "GOLD", "Gold on every Frontier mission"),
+        ("ace", "Lunar Ace", "GOLD", "Reach the top rank"),
+        ("hat-trick", "Hat Trick", "SILVER", "Land all three dailies in one day"),
+        ("streak-3", "Regular Visitor", "BRONZE", "Land a daily three days running"),
+        ("streak-7", "Week on the Moon", "SILVER", "Land a daily seven days running"),
+        ("streak-30", "Moonstruck", "GOLD", "Land a daily thirty days running"),
+        ("daily-gold", "Frontier Gold", "SILVER", "Gold on a Frontier daily"))),
+)
+ACHIEVEMENTS = tuple(Achievement(key, name, tier, group, hint,
+                                 group == "SPECTACULAR CRASHES" or key == "every-limit")
+                     for group, rows in _CATALOGUE for key, name, tier, hint in rows)
+ACHIEVEMENT = {achievement.key: achievement for achievement in ACHIEVEMENTS}
+# Counter thresholds: (counter, value, achievement).
+MILESTONES = (("landings", 1, "land-1"), ("landings", 10, "land-10"), ("landings", 25, "land-25"),
+              ("landings", 50, "land-50"), ("landings", 100, "land-100"), ("landings", 250, "land-250"),
+              ("landings", 500, "land-500"), ("flight_seconds", 3600, "air-1h"),
+              ("flight_seconds", 5 * 3600, "air-5h"), ("flight_seconds", 24 * 3600, "air-24h"),
+              ("crashes", 10, "crash-10"), ("crashes", 50, "crash-50"))
+
+
+def flight_log(mission: Mission, flight: Flight, outcome: str):
+    """What one finished flight adds to a pilot's counters: (totals, lowest, highest).
+    `outcome` is "landed", "crashed" or "aborted". The training basin counts as
+    simulator time; the rest as ranked flying, with personal records from landings."""
+    if not mission.difficulty:
+        return {"sim_flights": 1, "sim_seconds": flight.elapsed}, {}, {}
+    added = {{"landed": "landings", "crashed": "crashes"}.get(outcome, "aborts"): 1,
+             "flight_seconds": flight.elapsed}
+    if outcome != "landed":
+        return added, {}, {}
+    pad = flight.terrain.pad
+    middle = sum(x for x, _ in flight.feet()) / 2
+    return added, {"softest": abs(flight.vy), "closest": abs(middle - (pad.left + pad.right) / 2)}, \
+        {"most_fuel": flight.fuel}
+
+
+def apply_log(counters: dict[str, float], added: dict, lowest: dict, highest: dict) -> dict[str, float]:
+    """`flight_log` applied to counters held in memory (a caller without records)."""
+    counters = dict(counters)
+    for name, value in added.items():
+        counters[name] = counters.get(name, 0) + value
+    for name, value in lowest.items():
+        counters[name] = min(counters.get(name, value), value)
+    for name, value in highest.items():
+        counters[name] = max(counters.get(name, value), value)
+    return counters
+
+
+def flight_feats(mission: Mission, flight: Flight) -> set[str]:
+    """Achievements one finished ranked flight earns by itself."""
+    if not mission.difficulty or flight.status not in ("landed", "crashed"):
+        return set()
+    pad = flight.terrain.pad
+    centre = (pad.left + pad.right) / 2
+    feet = flight.feet()
+    vy, vx, tilt = abs(flight.vy), abs(flight.vx), abs(flight.angle) + 1e-9
+    got = set()
+    if flight.status == "landed":
+        middle = sum(x for x, _ in feet) / 2
+        for key, met in (("feather", vy < .3), ("no-drift", vx < .1), ("dead-centre", abs(middle - centre) <= 1),
+                         ("fuel-miser", flight.fuel >= .75 * flight.initial_fuel), ("fumes", flight.fuel < 1),
+                         ("by-the-book", vy >= 2.9), ("shuffle", vx >= 1.9), ("leaning-in", tilt >= 10),
+                         ("edge", min(min(x - pad.left, pad.right - x) for x, _ in feet) <= .5),
+                         ("every-limit", vy >= 2.5 and vx >= 1.5 and tilt >= 10)):
+            if met:
+                got.add(key)
+        if {"feather", "no-drift", "dead-centre"} <= got:
+            got.add("perfect")
+        return got
+    if flight.reason.startswith("Flight corridor"):
+        return {"off-the-map"}  # never touched the ground: no impact to judge
+    speed = math.hypot(vx, vy)
+    for key, met in (("lithobraking", speed > 30), ("meteorite", speed > 60),
+                     ("wrong-crater", abs(flight.x - centre) > 300),
+                     ("full-tank", flight.fuel >= flight.initial_fuel), ("dead-stick", flight.fuel <= 0),
+                     ("so-close", flight.reason.startswith("Hard impact") and vy <= 3.3),
+                     ("tipping-point", tilt >= 50)):
+        if met:
+            got.add(key)
+    return got
+
+
+def counter_feats(counters: dict[str, float]) -> set[str]:
+    return {key for name, needed, key in MILESTONES if counters.get(name, 0) >= needed}
+
+
+_DAILY_KEY = re.compile(r"daily-(\d{4}-\d\d-\d\d)(?:-(maria|highlands|frontier))?")
+
+
+@lru_cache(maxsize=64)
+def _daily(day: str, tier: str | None) -> Mission:
+    """The daily a stored key names. Before v0.4.0 there was one, worth difficulty 2."""
+    if tier is None:
+        return Mission("daily-" + day, "DAILY", "", 2, 0, 0, 0, 0, 0, 0)
+    return daily_missions(day)[["maria", "highlands", "frontier"].index(tier)]
+
+
+def career_feats(bests: dict[str, int], catalog: tuple[Mission, ...]) -> set[str]:
+    """Achievements a pilot's bests earn, whenever those were set."""
+    got = set()
+    by_key = {mission.key: mission for mission in catalog}
+    golds = False
+    for chapter in CHAPTERS:
+        if not chapter.ranked:
+            continue
+        flown = [m for m in chapter_missions(chapter, catalog) if m.difficulty]
+        medals = [medal(m, bests.get(m.key, 0)) for m in flown]
+        golds = golds or "GOLD" in medals
+        if flown and all(medals):
+            got.add(chapter.key + "-landed")
+        if flown and all(m == "GOLD" for m in medals):
+            got.add(chapter.key + "-gold")
+    if career(bests, catalog).next_rank is None:
+        got.add("ace")
+    days: dict[str, set] = {}
+    for key, score in bests.items():
+        match = _DAILY_KEY.fullmatch(key)
+        if not match or key in by_key and not by_key[key].difficulty:
+            continue
+        day, tier = match.groups()
+        days.setdefault(day, set()).add(tier)
+        if medal(_daily(day, tier), score) == "GOLD":
+            golds = True
+            if tier == "frontier":
+                got.add("daily-gold")
+    if any({"maria", "highlands", "frontier"} <= tiers for tiers in days.values()):
+        got.add("hat-trick")
+    run = longest = 0
+    previous = None
+    for day in sorted(date.fromisoformat(day) for day in days):
+        run = run + 1 if previous is not None and (day - previous).days == 1 else 1
+        longest, previous = max(longest, run), day
+    for needed, key in ((3, "streak-3"), (7, "streak-7"), (30, "streak-30")):
+        if longest >= needed:
+            got.add(key)
+    if golds:
+        got.add("first-gold")
+    return got
+
+
 def date_format_ok(date_format: str) -> bool:
     """A portable date-only strftime subset; it keeps custom text out of the HUD."""
     return len(date_format) <= 32 and re.fullmatch(r"(?:%[YymdbBaA]|[ ./,\-])+", date_format) is not None
@@ -864,8 +1065,31 @@ class DailyClock:
         return self.now().astimezone(self.zone).date().isoformat()
 
 
+# The records schema. Version 1 held pilots and their bests; version 2 adds
+# running counters, achievements and Programs, all additive, so a version 1
+# file upgrades in place on its first open and keeps every record.
+SCHEMA = {
+    "pilots": "CREATE TABLE pilots (node TEXT NOT NULL, user INTEGER NOT NULL, handle TEXT NOT NULL, PRIMARY KEY(node,user))",
+    "scores": "CREATE TABLE scores (node TEXT NOT NULL, user INTEGER NOT NULL, mission TEXT NOT NULL, score INTEGER NOT NULL, achieved INTEGER NOT NULL, PRIMARY KEY(node,user,mission), FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
+    "counters": "CREATE TABLE counters (node TEXT NOT NULL, user INTEGER NOT NULL, name TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY(node,user,name), FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
+    "achievements": "CREATE TABLE achievements (node TEXT NOT NULL, user INTEGER NOT NULL, key TEXT NOT NULL, achieved INTEGER NOT NULL, PRIMARY KEY(node,user,key), FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
+    "programs": "CREATE TABLE programs (id INTEGER PRIMARY KEY, node TEXT NOT NULL, user INTEGER NOT NULL, season TEXT NOT NULL, preset TEXT NOT NULL, started INTEGER NOT NULL, ended INTEGER, status TEXT NOT NULL, score INTEGER NOT NULL, FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
+    "program_missions": "CREATE TABLE program_missions (program INTEGER NOT NULL, mission INTEGER NOT NULL, sim_runs INTEGER NOT NULL, sim_seconds REAL NOT NULL, real_started INTEGER, result TEXT, score INTEGER NOT NULL, variation TEXT, PRIMARY KEY(program,mission), FOREIGN KEY(program) REFERENCES programs(id))",
+}
+SCHEMA_VERSION = 2
+SCHEMA_V1 = {"pilots", "scores"}
+
+
+def _columns(statement: str) -> list[str]:
+    """A CREATE TABLE statement's column names, in order."""
+    body = statement[statement.index("(") + 1:statement.rindex(")")]
+    return [part.split()[0] for part in body.split(", ")
+            if not part.startswith(("PRIMARY KEY", "FOREIGN KEY"))]
+
+
 class Records:
-    """Node-local identities, short transactions, and one best per mission/pilot."""
+    """Node-local identities, short transactions, one best per mission/pilot,
+    and each pilot's running counters and achievements."""
     APP_ID = 0x4C4C0001
 
     def __init__(self, path: Path):
@@ -879,15 +1103,20 @@ class Records:
             identity = self.db.execute("PRAGMA application_id").fetchone()[0]
             tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not tables and version == identity == 0:
-                self.db.execute("CREATE TABLE pilots (node TEXT NOT NULL, user INTEGER NOT NULL, handle TEXT NOT NULL, PRIMARY KEY(node,user))")
-                self.db.execute("CREATE TABLE scores (node TEXT NOT NULL, user INTEGER NOT NULL, mission TEXT NOT NULL, score INTEGER NOT NULL, achieved INTEGER NOT NULL, PRIMARY KEY(node,user,mission), FOREIGN KEY(node,user) REFERENCES pilots(node,user))")
+                for statement in SCHEMA.values():
+                    self.db.execute(statement)
                 self.db.execute(f"PRAGMA application_id={self.APP_ID}")
-                self.db.execute("PRAGMA user_version=1")
-            elif version != 1 or identity != self.APP_ID or tables != {"pilots", "scores"}:
+                self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            elif version == 1 and identity == self.APP_ID and tables == SCHEMA_V1:
+                # Version 1 upgrades in place: new tables only, every record kept.
+                for table, statement in SCHEMA.items():
+                    if table not in SCHEMA_V1:
+                        self.db.execute(statement)
+                self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            elif version != SCHEMA_VERSION or identity != self.APP_ID or tables != set(SCHEMA):
                 raise DoorError("Records schema is unsupported; preserve the database and use its matching game version.")
-            for table, expected in (("pilots", ["node", "user", "handle"]),
-                                    ("scores", ["node", "user", "mission", "score", "achieved"])):
-                if [row[1] for row in self.db.execute(f"PRAGMA table_info({table})")] != expected:
+            for table, statement in SCHEMA.items():
+                if [row[1] for row in self.db.execute(f"PRAGMA table_info({table})")] != _columns(statement):
                     raise DoorError("Records schema is incomplete; restore a verified backup.")
             if self.db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise DoorError("Records failed SQLite integrity checking; preserve and restore a verified backup.")
@@ -941,6 +1170,69 @@ class Records:
         self.identify(host)
         return self.db.execute("SELECT p.handle,s.score,s.user FROM scores s JOIN pilots p USING(node,user) WHERE s.node=? AND s.mission=? ORDER BY s.score DESC,s.achieved,s.user LIMIT 10",
                                (host.node, mission.key)).fetchall()
+
+    def counters(self, host: Host) -> dict[str, float]:
+        """This pilot's running totals and personal records."""
+        if not host.ranked:
+            return {}
+        return dict(self.db.execute("SELECT name, value FROM counters WHERE node=? AND user=?",
+                                    (host.node, host.user)).fetchall())
+
+    def log(self, host: Host, added: dict[str, float], lowest: dict[str, float] | None = None,
+            highest: dict[str, float] | None = None):
+        """Add to running totals and keep personal records (the lowest or the
+        highest value seen), in one transaction."""
+        if not host.ranked:
+            return
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            self.identify(host)
+            for name, value in added.items():
+                self.db.execute("INSERT INTO counters VALUES (?,?,?,?) ON CONFLICT(node,user,name) DO UPDATE SET value=value+excluded.value",
+                                (host.node, host.user, name, value))
+            for pick, values in (("min", lowest or {}), ("max", highest or {})):
+                for name, value in values.items():
+                    self.db.execute(f"INSERT INTO counters VALUES (?,?,?,?) ON CONFLICT(node,user,name) DO UPDATE SET value={pick}(value, excluded.value)",
+                                    (host.node, host.user, name, value))
+            self.db.execute("COMMIT")
+        except sqlite3.Error:
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
+            raise
+
+    def held(self, host: Host) -> dict[str, int]:
+        """This pilot's achievements, each with when it was earned (ns since the epoch)."""
+        if not host.ranked:
+            return {}
+        return dict(self.db.execute("SELECT key, achieved FROM achievements WHERE node=? AND user=?",
+                                    (host.node, host.user)).fetchall())
+
+    def grant(self, host: Host, keys) -> list[str]:
+        """Record achievements; return those that are new to this pilot."""
+        if not host.ranked or not keys:
+            return []
+        new = []
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            self.identify(host)
+            now = time.time_ns()
+            for key in keys:
+                if self.db.execute("INSERT OR IGNORE INTO achievements VALUES (?,?,?,?)",
+                                   (host.node, host.user, key, now)).rowcount:
+                    new.append(key)
+            self.db.execute("COMMIT")
+        except sqlite3.Error:
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
+            raise
+        return new
+
+    def rarity(self, host: Host) -> tuple[dict[str, int], int]:
+        """How many of this node's pilots hold each achievement, and how many pilots it has."""
+        held = dict(self.db.execute("SELECT key, COUNT(*) FROM achievements WHERE node=? GROUP BY key",
+                                    (host.node,)).fetchall())
+        pilots = self.db.execute("SELECT COUNT(*) FROM pilots WHERE node=?", (host.node,)).fetchone()[0]
+        return held, pilots
 
 
 # ---------------------------------------------------------------------------
@@ -1907,13 +2199,52 @@ def draw_stars(canvas: Canvas, stars, frame: int, unicode: bool, open_sky, top: 
 
 
 @dataclass(frozen=True)
+class Logbook:
+    """What the Pilot Record shows: running counters, achievements held (with
+    when), how many of the node's pilots hold each, and where the screen is."""
+    counters: dict = field(default_factory=dict)
+    held: dict = field(default_factory=dict)
+    rarity: dict = field(default_factory=dict)
+    pilots: int = 0
+    tab: int = 0
+    scroll: int = 0
+    date_format: str = "%Y-%m-%d"
+    zone: object = timezone.utc
+
+
+@dataclass(frozen=True)
 class Deck:
     """What the flight director shows beyond the chosen mission: the chapter
-    tab, the pilot's bests, whether they are kept, and the last award."""
+    tab, the pilot's bests, whether they are kept, the last award, the
+    achievements the last flight earned, and the Pilot Record."""
     chapter: int = 0
     bests: dict = field(default_factory=dict)
     saved: bool = False
     award: Award | None = None
+    unlocked: tuple = ()
+    logbook: Logbook | None = None
+
+
+def full_card(height: int) -> bool:
+    """Whether the full 20-row card clears the instruments, centred: from 33 rows."""
+    return max(1, (height - 20) // 2) + 20 <= height - 7
+
+
+def record_rows(height: int) -> int:
+    """Lines the Pilot Record's body shows at this height."""
+    return 15 if full_card(height) else 11
+
+
+def _duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds >= 3600:
+        return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
+    return f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
+
+
+# The Achievements tab: a heading per group, then its achievements.
+RECORD_ROWS = tuple(row for group in dict.fromkeys(a.group for a in ACHIEVEMENTS)
+                    for row in (group, *(a for a in ACHIEVEMENTS if a.group == group)))
 
 
 def medal_parts(kind: str | None, unicode: bool) -> list[tuple[str, tuple]]:
@@ -2248,10 +2579,13 @@ class Display:
             return self.scene(c, mode, scene_age, flight, record_note, mission)
         span = self.cockpit(c, flight, mission, remaining, slow)
         unicode = self.host.unicode
-        if mode == "menu":
+        if mode in ("menu", "record"):
             self.clear_hud(c, *self.menu_box(c)[1::2])
             c.dim()
-            self.menu(c, mission, catalog or missions(), record_note, clock_note)
+            if mode == "menu":
+                self.menu(c, mission, catalog or missions(), record_note, clock_note)
+            else:
+                self.record(c, catalog or missions())
             return c
         lines, accent, mine = None, 5, None
         if mode == "paused":
@@ -2294,6 +2628,10 @@ class Display:
                 lines.append(f"PROMOTED TO {award.promoted}" if award.promoted else
                              f"Rank {ladder.rank}: {ladder.points} medal points"
                              + (f", {ladder.next_at - ladder.points} to {ladder.next_rank}" if ladder.next_rank else ""))
+            if self.deck.unlocked:
+                first = ACHIEVEMENT[self.deck.unlocked[0]]
+                more = len(self.deck.unlocked) - 1
+                lines.append(f"ACHIEVEMENT: {first.name} ({first.tier.lower()})" + (f"  +{more} more" if more else ""))
             lines += [record_note or "Training flight / unranked", "",
                       "[R] Retry    [M] Mission briefing", self.back]
         elif mode == "scores":
@@ -2331,14 +2669,24 @@ class Display:
                 c.fill(0, row, c.width, 1)
 
     def menu_box(self, c: Canvas) -> tuple[int, int, int, int]:
-        """The flight director's card: x, y, width and height. Centred, the full
-        card clears the instruments from 33 rows; on a shorter screen a compact
-        one sits under the header, its shadow on the instruments' rule at most,
-        and the whole cockpit shows below it."""
-        box_w, y = min(76, c.width - 2), max(1, (c.height - 20) // 2)
-        if y + 20 <= c.height - 7:
-            return (c.width - box_w) // 2, y, box_w, 20
+        """The flight director's card, and the Pilot Record's: x, y, width and
+        height. Centred, the full card clears the instruments from 33 rows; on a
+        shorter screen a compact one sits under the header, its shadow on the
+        instruments' rule at most, and the whole cockpit shows below it."""
+        box_w = min(76, c.width - 2)
+        if full_card(c.height):
+            return (c.width - box_w) // 2, max(1, (c.height - 20) // 2), box_w, 20
         return (c.width - box_w) // 2, 2, box_w, 15
+
+    def rank_parts(self, ladder: Career) -> list:
+        """The pilot's rank, a bar to the next, and the medal points."""
+        unicode = self.host.unicode
+        floor = RANKS[ladder.level][0]
+        fill = 1.0 if ladder.next_at is None else (ladder.points - floor) / (ladder.next_at - floor)
+        bar = [(("━" if unicode else "=") if n < round(fill * 8) else ("─" if unicode else "-"),
+                (236, 180, 52) if n < round(fill * 8) else (52, 64, 98)) for n in range(8)]
+        points = f" {ladder.points}/{ladder.next_at} pts" if ladder.next_at else f" {ladder.points} pts"
+        return [("RANK ", 9), (ladder.rank, 5), (" ", 9), *bar, (points, 6)]
 
     def menu(self, c: Canvas, mission: Mission, catalog: tuple, record_note: str, clock_note: str):
         """The flight director: chapter tabs, the pilot's rank, the chapter's
@@ -2362,12 +2710,7 @@ class Display:
             tab_x += len(label) + 1
         # The career: rank, progress to the next and the tally.
         ladder = career(deck.bests, catalog)
-        floor = RANKS[ladder.level][0]
-        fill = 1.0 if ladder.next_at is None else (ladder.points - floor) / (ladder.next_at - floor)
-        bar = [(("━" if unicode else "=") if n < round(fill * 8) else ("─" if unicode else "-"),
-                (236, 180, 52) if n < round(fill * 8) else (52, 64, 98)) for n in range(8)]
-        points = f" {ladder.points}/{ladder.next_at} pts" if ladder.next_at else f" {ladder.points} pts"
-        c.rich(lx, y0 + 2, [("RANK ", 9), (ladder.rank, 5), (" ", 9), *bar, (points, 6)], PANEL)
+        c.rich(lx, y0 + 2, self.rank_parts(ladder), PANEL)
         tally = [(f"{ladder.landed}/{ladder.total}", 6), (" landed  ", 9), (str(ladder.golds), 6),
                  (" gold", 9)] + ([("  session only", 12)] if not deck.saved else [])
         c.rich(x0 + box_w - 3 - sum(_cells(t) for t, _ in tally), y0 + 2, tally, PANEL)
@@ -2422,16 +2765,101 @@ class Display:
         for n, line in enumerate(notes[:2]):
             c.text(rx, stats_row + 4 + n, plain(line, rw), 12, PANEL)
         keys = f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual"
+        back = "[P] Pilot record    " + self.back
         if compact:
             c.annotated(lx, y0 + box_h - 3, keys, PANEL, box_w - 6)
-            c.annotated(lx, y0 + box_h - 2, self.back, PANEL, box_w - 6)
+            c.annotated(lx, y0 + box_h - 2, back, PANEL, box_w - 6)
             return
         c.text(x0 + 1, y0 + 14, rule, EDGE, PANEL)
         c.annotated(lx, y0 + 15, keys, PANEL, box_w - 6)
         c.annotated(lx, y0 + 16, f"In flight: [W/S {updown}] Thrust  [A/D {sideways}] Tilt  [0-9] Power  [SPACE] Cut",
                     PANEL, box_w - 6)
         c.annotated(lx, y0 + 17, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
-        c.annotated(lx, y0 + 18, self.back, PANEL, box_w - 6)
+        c.annotated(lx, y0 + 18, back, PANEL, box_w - 6)
+
+    def record(self, c: Canvas, catalog: tuple):
+        """The Pilot Record: the career on one tab, the achievements on the other."""
+        unicode, deck = self.host.unicode, self.deck
+        book = deck.logbook or Logbook()
+        x0, y0, box_w, box_h = self.menu_box(c)
+        compact = box_h < 20
+        width = box_w - 6
+        lx = x0 + 3
+        c.frame(x0, y0, box_w, box_h, "PILOT RECORD / " + self.host.handle
+                + ("" if deck.saved else " / this session only"), unicode)
+        tab_x = lx - 1
+        for n, label in enumerate(("CAREER", "ACHIEVEMENTS")):
+            chosen = n == book.tab
+            c.text(tab_x, y0 + 1, f" {label} ", (255, 240, 200) if chosen else 9, HIGHLIGHT if chosen else PANEL)
+            tab_x += len(label) + 3
+        held = sum(1 for a in ACHIEVEMENTS if a.key in book.held)
+        tally = [(f"{held}/{len(ACHIEVEMENTS)}", 6), (" achievements", 9)]
+        c.rich(x0 + box_w - 3 - sum(_cells(t) for t, _ in tally), y0 + 1, tally, PANEL)
+        if not compact:
+            c.text(x0 + 1, y0 + 2, ("─" if unicode else "-") * (box_w - 2), EDGE, PANEL)
+        top, rows = y0 + (2 if compact else 3), record_rows(c.height)
+        lines = self.career_lines(book, catalog) if book.tab == 0 else self.achievement_lines(book, width)
+        scroll = min(book.scroll, max(0, len(lines) - rows))
+        for n, parts in enumerate(lines[scroll:scroll + rows]):
+            c.rich(lx, top + n, parts, PANEL, width)
+        keys = f"[{self.arrows[0]}] Tab  "
+        if book.tab == 1:
+            keys += f"[{self.arrows[1]}] Scroll {scroll + 1}-{min(len(lines), scroll + rows)} of {len(lines)}  "
+        c.annotated(lx, y0 + box_h - 2, keys + "[P] Back  " + self.back, PANEL, width)
+
+    def career_lines(self, book: Logbook, catalog: tuple) -> list:
+        unicode, bests = self.host.unicode, self.deck.bests
+        ladder = career(bests, catalog)
+        counts = book.counters
+        lines = [self.rank_parts(ladder),
+                 [("LANDED ", 9), (f"{ladder.landed}/{ladder.total}", 6), (" missions  ", 9),
+                  (str(ladder.golds), 6), (" gold", 9)], []]
+        for chapter in CHAPTERS:
+            if not chapter.ranked:
+                continue
+            flown = [m for m in chapter_missions(chapter, catalog) if m.difficulty]
+            marks = [part for m in flown for part in (*medal_parts(medal(m, bests.get(m.key, 0)), unicode), (" ", 9))]
+            landed = sum(1 for m in flown if bests.get(m.key, 0))
+            lines.append([(f"{chapter.name:<11}", 7), *marks, (f" {landed}/{len(flown)} landed", 9)])
+
+        def number(name: str, form: str, unit: str):
+            return (form.format(counts[name]) + unit, 6) if name in counts else ("-", 9)
+        lines += [[],
+                  [("FLIGHTS ", 9), (f"{counts.get('landings', 0):.0f}", 6), (" landed  ", 9),
+                   (f"{counts.get('crashes', 0):.0f}", 6), (" crashed  ", 9),
+                   (f"{counts.get('aborts', 0):.0f}", 6), (" abandoned", 9)],
+                  [("IN THE AIR ", 9), (_duration(counts.get("flight_seconds", 0)), 6), ("   SIMULATOR ", 9),
+                   (f"{counts.get('sim_flights', 0):.0f} flights, {_duration(counts.get('sim_seconds', 0))}", 6)],
+                  [("SOFTEST ", 9), number("softest", "{:.2f}", " m/s"), ("  CLOSEST ", 9),
+                   number("closest", "{:.1f}", " m"), ("  MOST FUEL ", 9), number("most_fuel", "{:.1f}", " kg")]]
+        tiers = [part for tier in ("GOLD", "SILVER", "BRONZE") for part in (
+            ("●" if unicode else tier[0], MEDAL_COLORS[tier][1]),
+            (f" {sum(1 for a in ACHIEVEMENTS if a.tier == tier and a.key in book.held)}  ", 6))]
+        hidden = sum(1 for a in ACHIEVEMENTS if a.hidden and a.key not in book.held)
+        lines.append([("ACHIEVEMENTS ", 9), *tiers, (f"{hidden} hidden to find" if hidden else "", 9)])
+        return lines
+
+    def achievement_lines(self, book: Logbook, width: int) -> list:
+        unicode = self.host.unicode
+        lines = []
+        for row in RECORD_ROWS:
+            if isinstance(row, str):
+                lines.append([(row, 5)])
+                continue
+            got = row.key in book.held
+            mark = ("●" if unicode else row.tier[0]) if got else ("·" if unicode else ".")
+            name = row.name if got or not row.hidden else "???"
+            if got:
+                when = datetime.fromtimestamp(book.held[row.key] / 1e9, timezone.utc).astimezone(book.zone)
+                detail = when.strftime(book.date_format)
+            else:
+                detail = "Hidden until earned" if row.hidden else row.hint
+            rarity = f"{book.rarity.get(row.key, 0)} of {book.pilots}" if book.pilots else ""
+            room = width - 3 - 21 - len(rarity) - 1
+            lines.append([(f" {mark} ", MEDAL_COLORS[row.tier][1] if got else (60, 72, 104)),
+                          (f"{plain(name, 20):<21}", 7 if got else 9),
+                          (f"{plain(detail, room):<{room}} ", 6 if got else 9), (rarity, 9)])
+        return lines
 
     def landscape(self, ground: Terrain, left: float, metres: float, top: float, width: int,
                   view_h: int, large: bool, across: int = 1) -> tuple:
@@ -2727,6 +3155,12 @@ class Announcer:
             self.event("achievement", "Gold landing: " + award.mission.name.title())
         self.standings(catalog)
 
+    def achievements(self, keys):
+        """Silver and gold achievements earned live; bronze ones stay quiet."""
+        for key in keys:
+            if ACHIEVEMENT[key].tier in ("SILVER", "GOLD"):
+                self.event("achievement", ACHIEVEMENT[key].name)
+
     def event(self, kind: str, title: str):
         if self.host.event_types is None or kind in self.host.event_types:
             self.write({"event": {"type": kind, "user_id": self.host.user,
@@ -2794,6 +3228,21 @@ class Game:
         self.award: Award | None = None
         self.queue: list[str] = []
         self.announcer: Announcer | None = None
+        # Running counters and achievements: from the records for a ranked
+        # pilot, for this session otherwise. What the bests already earn is
+        # awarded quietly at once, so records from before achievements count.
+        self.counters: dict[str, float] = {}
+        self.held: dict[str, int] = {}
+        if self.records is not None and self.host.ranked:
+            try:
+                self.counters = self.records.counters(self.host)
+                self.held = self.records.held(self.host)
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+        self.grant(career_feats(self.bests, self.missions))
+        self.unlocked: list[str] = []
+        self.record_tab = self.record_scroll = 0
+        self.rarity: tuple[dict, int] = ({}, 0)
 
     def shelf(self) -> tuple[Mission, ...]:
         """The missions on the selected chapter's tab."""
@@ -2809,6 +3258,44 @@ class Game:
     def career(self) -> Career:
         return career(self.bests, self.missions)
 
+    def grant(self, keys) -> list[str]:
+        """Award the achievements not yet held; return the new ones, in catalogue order."""
+        new = [a.key for a in ACHIEVEMENTS if a.key in keys and a.key not in self.held]
+        if new and self.records is not None and self.host.ranked:
+            try:
+                new = self.records.grant(self.host, new)
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+                return []
+        now = time.time_ns()
+        for key in new:
+            self.held.setdefault(key, now)
+        return new
+
+    def settle(self, outcome: str) -> list[str]:
+        """Count a finished flight ("landed", "crashed" or "aborted") and award
+        what it earned; announce the notable ones. Returns the new achievements."""
+        added, lowest, highest = flight_log(self.mission, self.flight, outcome)
+        if self.records is not None and self.host.ranked:
+            try:
+                self.records.log(self.host, added, lowest, highest)
+                self.counters = self.records.counters(self.host)
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+        else:
+            self.counters = apply_log(self.counters, added, lowest, highest)
+        self.unlocked = []
+        if self.mission.difficulty:
+            self.unlocked = self.grant(flight_feats(self.mission, self.flight) | counter_feats(self.counters)
+                                       | career_feats(self.bests, self.missions))
+            if self.announcer is not None:
+                self.announcer.achievements(self.unlocked)
+        return self.unlocked
+
+    def logbook(self) -> Logbook:
+        return Logbook(self.counters, self.held, *self.rarity, self.record_tab, self.record_scroll,
+                       self.clock.date_format, self.clock.zone)
+
     def refresh_daily(self):
         day = self.clock.day()
         if day != self.day:
@@ -2818,6 +3305,7 @@ class Game:
 
     def launch(self):
         self.refresh_daily()
+        self.unlocked = []
         self.flight = self.mission.launch()
         self.mode = "launch" if self.scenes else "flying"
         self.scene_age = self.accumulator = 0
@@ -2842,6 +3330,8 @@ class Game:
         """Return True on a screen transition: discard remaining typed-ahead keys."""
         if self.mode == "confirm":
             if key == "y":
+                if self.flight.status == "flying":
+                    self.settle("aborted")
                 self.leaving = True
             elif key in ("n", "escape"):
                 self.mode = self.before_quit
@@ -2895,6 +3385,26 @@ class Game:
             self.mode = "menu"
             self.refresh_daily()
             return True
+        if self.mode == "menu" and key == "p":
+            if self.records is not None and self.host.ranked:
+                try:
+                    self.rarity = self.records.rarity(self.host)
+                except sqlite3.Error as exc:
+                    print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+            self.mode, self.record_scroll = "record", 0
+            return True
+        if self.mode == "record":
+            if key in ("p", "escape"):
+                self.mode = "menu"
+                self.refresh_daily()
+            elif key in ("left", "right", "a", "d"):
+                self.record_tab, self.record_scroll = 1 - self.record_tab, 0
+            elif key in ("up", "down", "w", "s") and self.record_tab == 1:
+                last = max(0, len(RECORD_ROWS) - record_rows(self.host.height))
+                self.record_scroll = max(0, min(last, self.record_scroll + (-1 if key in ("up", "w") else 1)))
+            else:
+                return False
+            return True
         if self.mode in ("flying", "paused") and key == "p":
             self.mode = "paused" if self.mode == "flying" else "flying"
             return True
@@ -2945,6 +3455,7 @@ class Game:
                     self.queue = ["medal"] * bool(self.award.medal) + ["promotion"] * bool(self.award.promoted)
                     if saved and self.announcer is not None:
                         self.announcer.landed(self.award, self.missions)
+                self.settle(self.flight.status)
                 self.mode = ("landing" if self.flight.status == "landed" else "crash") if self.scenes else "debrief"
                 if not self.scenes:
                     self.queue = []
@@ -3082,12 +3593,13 @@ def run(host: Host, started: float) -> int:
                                          game.mission, game.standings, game.record_note, game.scene_age,
                                          clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30),
                                          game.missions, Deck(game.chapter, game.bests,
-                                                             game.records is not None and host.ranked, game.award))
+                                                             game.records is not None and host.ranked, game.award,
+                                                             tuple(game.unlocked), game.logbook()))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
                     # splash's hold only twinkles, so idling costs little CPU.
-                    if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm"):
+                    if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm", "record"):
                         next_frame = now + 1
                     elif game.mode == "splash" and game.scene_age >= SCENE_SECONDS["splash"]:
                         next_frame = now + .25

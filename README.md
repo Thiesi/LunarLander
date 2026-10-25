@@ -5,8 +5,8 @@
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, three daily challenges, medals for every
-safe landing and a career from Cadet to Lunar Ace. Read the drift. Watch the
-fuel. Make both feet count.
+safe landing, 44 achievements and a career from Cadet to Lunar Ace. Read the
+drift. Watch the fuel. Make both feet count.
 
 Lunar Lander is **one Python file** (`lunar_lander.py`) with no dependencies
 beyond the standard library. It needs Python 3.11 or newer and a terminal of at
@@ -36,6 +36,11 @@ itself.
   frontier run.
 - **Medals and ranks:** gold, silver and bronze for every safe landing, and a
   career from Cadet to Lunar Ace, with a medal ceremony and promotion fireworks.
+- **Achievements:** 44 of them, from milestones and precision touchdowns to
+  close calls, career feats and nine hidden spectacular crashes. The **Pilot
+  Record** ([P] in the flight director) shows the career, flight totals and
+  personal records on one tab and the achievements, with how many of the node's
+  pilots hold each, on the other.
 - **Flight:** deterministic lunar physics; a landing needs both feet on the pad,
   a vertical speed of 3 m/s or less, a drift of 2 m/s or less and a tilt of 10°
   or less. Fuel alerts appear over the view at 30 and 10 seconds of hover fuel.
@@ -62,8 +67,11 @@ backed up by NetBBS; back them up with SQLite's backup API, as
 [OPERATIONS](docs/operations.md#records-backups-and-upgrades) describes.
 
 Records are keyed by the node, the caller's numeric account and the mission, so
-a handle rename keeps a pilot's records. Guests fly practice only. Flights are
-not saved mid-air; a landing is committed before its debrief appears.
+a handle rename keeps a pilot's records. Beside each pilot's bests they keep
+running counters (landings, crashes, time in the air, simulator time, personal
+records) and achievements. Guests fly practice only, and keep counters and
+achievements for the session. Flights are not saved mid-air; a landing is
+committed before its debrief appears.
 
 ## SysOp setup
 
@@ -178,7 +186,7 @@ career standings:
 | Event | When |
 | --- | --- |
 | `rank` | A landing promotes the pilot to a new rank |
-| `achievement` | A pilot's first gold medal on a mission ("Gold landing: Tranquility") |
+| `achievement` | A pilot's first gold medal on a mission ("Gold landing: Tranquility"), or a silver or gold achievement ("Feather") |
 | standings | The node's Career Roster by medal points, at launch and after a landing, when the order has changed |
 
 Nothing earned offline or in an earlier session is reported. Without
@@ -212,8 +220,16 @@ Every release's notes carry a **NetBBS** line saying whether the saved data
 changed, so a SysOp knows whether it can run ahead of the copy NetBBS bundles:
 "saved data unchanged; runs on NetBBS 7.41.0 or later", or "changes the save
 format; wait for the NetBBS release that bundles it". The format NetBBS's
-backups check is the records database: application ID `0x4C4C0001`, schema
-(`user_version`) 1, tables `pilots` and `scores`.
+backups check is the records database, application ID `0x4C4C0001`:
+
+| Schema (`user_version`) | Tables | Releases |
+| --- | --- | --- |
+| 1 | `pilots`, `scores` | up to v0.4.x |
+| 2 | `pilots`, `scores`, `counters`, `achievements`, `programs`, `program_missions` | from the achievements release |
+
+A schema 1 file upgrades to schema 2 in place on its first open, keeping every
+record; the upgrade only adds tables. NetBBS accepts schema 2 from the release
+that resolves [NetBBS #1561](https://github.com/Thiesi/NetBBS/issues/1561).
 
 The banner is concept art rather than a game screen, and doubles as the
 repository's social preview; the [artwork notes](assets/README.md) explain how
