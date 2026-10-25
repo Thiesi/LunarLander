@@ -5,7 +5,8 @@
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, three daily challenges, medals for every
-safe landing, 44 achievements and a career from Cadet to Lunar Ace. Read the
+safe landing, 50 achievements, a career from Cadet to Lunar Ace, and Programs:
+practise in the simulator, then fly each mission for real exactly once. Read the
 drift. Watch the fuel. Make both feet count.
 
 Lunar Lander is **one Python file** (`lunar_lander.py`) with no dependencies
@@ -36,8 +37,15 @@ itself.
   frontier run.
 - **Medals and ranks:** gold, silver and bronze for every safe landing, and a
   career from Cadet to Lunar Ace, with a medal ceremony and promotion fireworks.
-- **Achievements:** 44 of them, from milestones and precision touchdowns to
-  close calls, career feats and nine hidden spectacular crashes. The **Pilot
+- **Programs:** a season's five to eight missions, the same for every pilot on
+  the node for a month, climbing from a broad sea to the frontier. Fly each in
+  the simulator as the preset allows, then for real exactly once, from a
+  slightly different start: **Cadet** (any number of simulator runs; a crash
+  loses that mission), **Astronaut** (one run per mission; a crash ends the
+  program) or **Test Pilot** (no simulator; a crash ends it). Each preset has
+  its own board, and leaving or losing the connection mid-flight counts as a crash.
+- **Achievements:** 50 of them, from milestones and precision touchdowns to
+  close calls, career feats, Programs and ten hidden ones. The **Pilot
   Record** ([P] in the flight director) shows the career, flight totals and
   personal records on one tab and the achievements, with how many of the node's
   pilots hold each, on the other.
@@ -186,7 +194,8 @@ career standings:
 | Event | When |
 | --- | --- |
 | `rank` | A landing promotes the pilot to a new rank |
-| `achievement` | A pilot's first gold medal on a mission ("Gold landing: Tranquility"), or a silver or gold achievement ("Feather") |
+| `achievement` | A pilot's first gold medal on a mission ("Gold landing: Tranquility"), a silver or gold achievement ("Feather"), or a completed program ("Program complete: Astronaut, 6 of 6, 31,200 points") |
+| `season` | The node's first program of a new season ("7 missions, through November"); sent only to a NetBBS that lists `season` among its event types |
 | standings | The node's Career Roster by medal points, at launch and after a landing, when the order has changed |
 
 Nothing earned offline or in an earlier session is reported. Without

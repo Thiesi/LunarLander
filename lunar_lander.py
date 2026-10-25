@@ -675,6 +675,31 @@ DAILY_TIERS = (
 )
 
 
+def generated_mission(key: str, name: str, briefing: str, spans: tuple, rng: random.Random,
+                      hardness: float, seed: int) -> Mission:
+    """A mission drawn from a chapter's spans at `hardness` (0 its easiest, 1 its
+    hardest), each setting with a little play: the dailies and Programs both."""
+    def pick(span, play=.25):
+        easy, hard = span
+        return easy + (hard - easy) * min(1.0, max(0.0, hardness + rng.uniform(-play, play)))
+    difficulties, widths, altitudes, offsets, drifts, fuels, sinks, floors, ceilings = spans
+    width = round(pick(widths))
+    offset, drift, fuel = round(pick(offsets)), round(pick(drifts)), round(pick(fuels))
+    sink = round(pick(sinks))
+    relief = (round(pick(floors)), round(pick(ceilings)))
+    # Clear of the highest ridge, whatever the draws.
+    altitude = max(round(pick(altitudes)), relief[1] + 120)
+    # The pad well inside the field; the approach from either side, drifting
+    # toward the pad as every authored mission does, and starting inside too.
+    center = rng.randint(100 + width // 2, 900 - width // 2)
+    side = rng.choice((-1, 1))
+    if not 60 <= center + side * offset <= 940:
+        side = -side
+    offset = side * min(offset, max(940 - center, center - 60))
+    return Mission(key, name, briefing, difficulties[0] if hardness < .5 else difficulties[1], center, width,
+                   altitude, offset, -side * drift, fuel, seed, sink, relief)
+
+
 def daily_missions(day: str, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
     """The day's three dailies. A pure function of the date: every node and
     every pilot flies the same three on the same day."""
@@ -682,30 +707,46 @@ def daily_missions(day: str, date_format: str = "%Y-%m-%d") -> tuple[Mission, ..
     dailies = []
     for n, (key, name, briefing, *spans) in enumerate(DAILY_TIERS):
         rng = random.Random(f"lunar-lander/daily/{day}/{key}")
-        hardness = rng.random()
-
-        def pick(span, play=.25):
-            easy, hard = span
-            return easy + (hard - easy) * min(1.0, max(0.0, hardness + rng.uniform(-play, play)))
-        difficulties, widths, altitudes, offsets, drifts, fuels, sinks, floors, ceilings = spans
-        width = round(pick(widths))
-        offset, drift, fuel = round(pick(offsets)), round(pick(drifts)), round(pick(fuels))
-        sink = round(pick(sinks))
-        relief = (round(pick(floors)), round(pick(ceilings)))
-        # Clear of the highest ridge, whatever the draws.
-        altitude = max(round(pick(altitudes)), relief[1] + 120)
-        # The pad well inside the field; the approach from either side, drifting
-        # toward the pad as every authored mission does, and starting inside too.
-        center = rng.randint(100 + width // 2, 900 - width // 2)
-        side = rng.choice((-1, 1))
-        if not 60 <= center + side * offset <= 940:
-            side = -side
-        offset = side * min(offset, max(940 - center, center - 60))
-        dailies.append(Mission(
-            f"daily-{day}-{key}", f"{name} {stamp}", briefing,
-            difficulties[0] if hardness < .5 else difficulties[1], center, width, altitude, offset,
-            -side * drift, fuel, int(day.replace("-", "")) * 10 + n, sink, relief))
+        dailies.append(generated_mission(f"daily-{day}-{key}", f"{name} {stamp}", briefing, tuple(spans), rng,
+                                         rng.random(), int(day.replace("-", "")) * 10 + n))
     return tuple(dailies)
+
+
+# Programs: (key, name, simulator runs per mission or None for any number,
+# whether a crash ends the program).
+PRESETS = (("cadet", "CADET", None, False), ("astronaut", "ASTRONAUT", 1, True), ("test", "TEST PILOT", 0, True))
+PRESET = {key: (name, runs, ends) for key, name, runs, ends in PRESETS}
+
+
+def varied(mission: Mission, rng: random.Random) -> tuple[Mission, dict]:
+    """The real flight: the simulator's terrain and pad, a slightly different
+    start. Drift within 15%, the start within 10 m, up to 3 kg less fuel and
+    the sink rate within 0.5 m/s, drawn at launch so nobody can learn it."""
+    start = min(940.0, max(60.0, mission.center + mission.offset + rng.uniform(-10, 10)))
+    change = {"drift": round(mission.drift * (1 + rng.uniform(-.15, .15)), 2),
+              "offset": round(start - mission.center, 1), "fuel": round(mission.fuel - rng.uniform(0, 3), 1),
+              "sink": round(mission.sink + rng.uniform(-.5, .5), 2)}
+    return replace(mission, **change), change
+
+
+@lru_cache(maxsize=4)
+def program_missions(season: str) -> tuple[Mission, ...]:
+    """A season's program: five to eight missions, the same for every pilot on
+    every node, climbing from the Maria span through Highlands to Frontier,
+    harder within each third. A pure function of the season ("2026-11")."""
+    rng = random.Random(f"lunar-lander/program/{season}")
+    count = rng.randint(5, 8)
+    flights = []
+    for n in range(count):
+        position = n / (count - 1)
+        tier = min(2, int(position * 3))
+        hardness = min(1.0, position * 3 - tier + rng.uniform(0, .2))
+        _, _, briefing, *spans = DAILY_TIERS[tier]
+        briefing = briefing.replace("Today's ", "")
+        flights.append(generated_mission(f"program-{season}-{n + 1}", f"MISSION {n + 1} OF {count}",
+                                         briefing[0].upper() + briefing[1:], tuple(spans), rng, hardness,
+                                         int(season.replace("-", "")) * 100 + n))
+    return tuple(flights)
 
 
 def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
@@ -758,15 +799,17 @@ CHAPTERS = (
     Chapter("highlands", "HIGHLANDS", ("ridgetop", "descartes", "hadley", "needle", "apennine")),
     Chapter("frontier", "FRONTIER", ("farside", "polar", "tsiolkovsky", "shackleton", "aitken")),
     Chapter("daily", "DAILY", ("daily-maria", "daily-highlands", "daily-frontier"), ranked=False),
+    Chapter("program", "PROGRAM", tuple(f"program-{n}" for n in range(1, 9)), ranked=False),
 )
 
 
 def chapter_missions(chapter: Chapter, catalog: tuple[Mission, ...]) -> tuple[Mission, ...]:
     by_key = {mission.key: mission for mission in catalog}
     for mission in catalog:
-        # A daily's key carries its date; the chapter names it by its manner.
-        if mission.key.startswith("daily-"):
-            by_key["daily-" + mission.key.rsplit("-", 1)[1]] = mission
+        # A daily's or a program mission's key carries its date; the chapter
+        # names it by its manner or its place in the program.
+        if mission.key.startswith(("daily-", "program-")):
+            by_key[mission.key.split("-", 1)[0] + "-" + mission.key.rsplit("-", 1)[1]] = mission
     return tuple(by_key[key] for key in chapter.missions if key in by_key)
 
 
@@ -826,7 +869,7 @@ class Achievement:
     hidden: bool = False
 
 
-# Hidden until earned: every spectacular crash, and one close call.
+# Hidden until earned: every spectacular crash, a close call and a natural.
 _CATALOGUE = (
     ("MILESTONES", (
         ("land-1", "First Contact", "BRONZE", "Land safely once"),
@@ -877,9 +920,16 @@ _CATALOGUE = (
         ("streak-7", "Week on the Moon", "SILVER", "Land a daily seven days running"),
         ("streak-30", "Moonstruck", "GOLD", "Land a daily thirty days running"),
         ("daily-gold", "Frontier Gold", "SILVER", "Gold on a Frontier daily"))),
+    ("PROGRAMS", (
+        ("program-cadet", "Graduate", "BRONZE", "Complete a Cadet program"),
+        ("program-astronaut", "Astronaut", "SILVER", "Complete an Astronaut program"),
+        ("program-test", "Test Pilot", "GOLD", "Complete a Test Pilot program"),
+        ("flawless", "Flawless", "SILVER", "Complete a Cadet program, none lost"),
+        ("never-trained", "Natural", "GOLD", "An Astronaut program, no simulator"),
+        ("sim-10h", "Simulator Junkie", "BRONZE", "Spend ten hours in the simulator"))),
 )
 ACHIEVEMENTS = tuple(Achievement(key, name, tier, group, hint,
-                                 group == "SPECTACULAR CRASHES" or key == "every-limit")
+                                 group == "SPECTACULAR CRASHES" or key in ("every-limit", "never-trained"))
                      for group, rows in _CATALOGUE for key, name, tier, hint in rows)
 ACHIEVEMENT = {achievement.key: achievement for achievement in ACHIEVEMENTS}
 # Counter thresholds: (counter, value, achievement).
@@ -887,7 +937,7 @@ MILESTONES = (("landings", 1, "land-1"), ("landings", 10, "land-10"), ("landings
               ("landings", 50, "land-50"), ("landings", 100, "land-100"), ("landings", 250, "land-250"),
               ("landings", 500, "land-500"), ("flight_seconds", 3600, "air-1h"),
               ("flight_seconds", 5 * 3600, "air-5h"), ("flight_seconds", 24 * 3600, "air-24h"),
-              ("crashes", 10, "crash-10"), ("crashes", 50, "crash-50"))
+              ("crashes", 10, "crash-10"), ("crashes", 50, "crash-50"), ("sim_seconds", 10 * 3600, "sim-10h"))
 
 
 def flight_log(mission: Mission, flight: Flight, outcome: str):
@@ -1226,6 +1276,102 @@ class Records:
                 self.db.execute("ROLLBACK")
             raise
         return new
+
+    # -- Programs ------------------------------------------------------------
+    # A real attempt is written as "pending" before its launch and settled at
+    # touchdown or impact, so one a lost connection left pending counts as lost.
+
+    def _write(self, statements):
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            result = statements()
+            self.db.execute("COMMIT")
+            return result
+        except sqlite3.Error:
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
+            raise
+
+    def program(self, host: Host) -> dict | None:
+        """This pilot's open program, after settling an attempt left pending."""
+        if not host.ranked:
+            return None
+        row = self.db.execute("SELECT id, season, preset, status, score FROM programs WHERE node=? AND user=? "
+                              "AND status='active' ORDER BY id DESC LIMIT 1", (host.node, host.user)).fetchone()
+        if row is None:
+            return None
+        pending = self.db.execute("SELECT mission FROM program_missions WHERE program=? AND result='pending'",
+                                  (row[0],)).fetchone()
+        if pending is not None:
+            self.program_end(row[0], pending[0], "lost", 0)
+            return self.program(host)
+        return dict(zip(("id", "season", "preset", "status", "score"), row))
+
+    def program_steps(self, program: int) -> dict[int, dict]:
+        """Each mission of a program the pilot has touched: simulator use and the real attempt."""
+        return {row[0]: dict(zip(("sim_runs", "sim_seconds", "result", "score"), row[1:]))
+                for row in self.db.execute("SELECT mission, sim_runs, sim_seconds, result, score FROM program_missions "
+                                           "WHERE program=?", (program,))}
+
+    def program_start(self, host: Host, season: str, preset: str) -> tuple[int, bool]:
+        """Open a new program, closing any open one; return its id and whether
+        it is the first on this node in its season."""
+        def statements():
+            self.identify(host)
+            first = not self.db.execute("SELECT 1 FROM programs WHERE node=? AND season=?",
+                                        (host.node, season)).fetchone()
+            now = time.time_ns()
+            self.db.execute("UPDATE programs SET status='abandoned', ended=? WHERE node=? AND user=? AND status='active'",
+                            (now, host.node, host.user))
+            cursor = self.db.execute("INSERT INTO programs (node, user, season, preset, started, ended, status, score) "
+                                     "VALUES (?,?,?,?,?,NULL,'active',0)", (host.node, host.user, season, preset, now))
+            return cursor.lastrowid, first
+        return self._write(statements)
+
+    def program_sim(self, program: int, mission: int, seconds: float):
+        self._write(lambda: self.db.execute(
+            "INSERT INTO program_missions VALUES (?,?,1,?,NULL,NULL,0,NULL) ON CONFLICT(program,mission) DO UPDATE "
+            "SET sim_runs=sim_runs+1, sim_seconds=sim_seconds+excluded.sim_seconds", (program, mission, seconds)))
+
+    def program_real(self, program: int, mission: int, variation: dict) -> bool:
+        """Commit the one real attempt before it launches; False if it was already flown."""
+        def statements():
+            now, varied = time.time_ns(), json.dumps(variation)
+            self.db.execute("INSERT OR IGNORE INTO program_missions VALUES (?,?,0,0,NULL,NULL,0,NULL)", (program, mission))
+            return self.db.execute("UPDATE program_missions SET real_started=?, result='pending', variation=? "
+                                   "WHERE program=? AND mission=? AND real_started IS NULL",
+                                   (now, varied, program, mission)).rowcount == 1
+        return self._write(statements)
+
+    def program_end(self, program: int, mission: int, result: str, score: int) -> str:
+        """Settle a real attempt ("landed", "crashed" or "lost"); return the program's status."""
+        def statements():
+            season, preset = self.db.execute("SELECT season, preset FROM programs WHERE id=?", (program,)).fetchone()
+            self.db.execute("UPDATE program_missions SET result=?, score=? WHERE program=? AND mission=?",
+                            (result, score, program, mission))
+            status = "active"
+            if result != "landed" and PRESET[preset][2]:
+                status = "over"
+            elif mission >= len(program_missions(season)):
+                status = "complete"
+            self.db.execute("UPDATE programs SET score=score+?, status=?, ended=? WHERE id=?",
+                            (score, status, None if status == "active" else time.time_ns(), program))
+            return status
+        return self._write(statements)
+
+    def program_board(self, host: Host, season: str, preset: str) -> list[tuple]:
+        """The season's best program per pilot for a preset: handle, missions
+        landed, missions lost, score and user id, best first."""
+        best: dict[int, tuple] = {}
+        for program, user, handle, score in self.db.execute(
+                "SELECT g.id, g.user, p.handle, g.score FROM programs g JOIN pilots p USING(node,user) "
+                "WHERE g.node=? AND g.season=? AND g.preset=?", (host.node, season, preset)):
+            results = [row[0] for row in self.db.execute("SELECT result FROM program_missions WHERE program=?",
+                                                         (program,))]
+            row = (handle, results.count("landed"), sum(r in ("crashed", "lost") for r in results), score, user, program)
+            if user not in best or (row[1], row[3], -row[5]) > (best[user][1], best[user][3], -best[user][5]):
+                best[user] = row
+        return sorted((row[:5] for row in best.values()), key=lambda row: (-row[1], -row[3], row[0]))[:10]
 
     def rarity(self, host: Host) -> tuple[dict[str, int], int]:
         """How many of this node's pilots hold each achievement, and how many pilots it has."""
@@ -2213,6 +2359,32 @@ class Logbook:
 
 
 @dataclass(frozen=True)
+class ProgramView:
+    """What the PROGRAM tab shows: the season, the open (or just finished)
+    program and its missions, and the program board."""
+    ready: bool = False
+    season: str = ""
+    count: int = 0
+    preset: str | None = None
+    status: str = ""
+    score: int = 0
+    steps: dict = field(default_factory=dict)
+    board: tuple = ()
+    board_preset: str = "cadet"
+
+    def next(self) -> int | None:
+        """The mission flown next, counting from 1; None when no program is running."""
+        if self.preset is None or self.status != "active":
+            return None
+        return next((n for n in range(1, self.count + 1) if not (self.steps.get(n) or {}).get("result")), None)
+
+    def runs_left(self, mission: int) -> int | None:
+        """Simulator runs left for a mission; None for any number."""
+        runs = PRESET[self.preset][1] if self.preset else 0
+        return None if runs is None else max(0, runs - (self.steps.get(mission) or {}).get("sim_runs", 0))
+
+
+@dataclass(frozen=True)
 class Deck:
     """What the flight director shows beyond the chosen mission: the chapter
     tab, the pilot's bests, whether they are kept, the last award, the
@@ -2223,6 +2395,8 @@ class Deck:
     award: Award | None = None
     unlocked: tuple = ()
     logbook: Logbook | None = None
+    kind: str = ""
+    program: ProgramView | None = None
 
 
 def full_card(height: int) -> bool:
@@ -2632,8 +2806,41 @@ class Display:
                 first = ACHIEVEMENT[self.deck.unlocked[0]]
                 more = len(self.deck.unlocked) - 1
                 lines.append(f"ACHIEVEMENT: {first.name} ({first.tier.lower()})" + (f"  +{more} more" if more else ""))
+            retry = {"real": "", "sim": "[R] Simulator again    "}.get(self.deck.kind, "[R] Retry    ")
+            if self.deck.kind == "sim" and self.deck.program and                     self.deck.program.runs_left(int(mission.key.rsplit("-", 1)[1])) == 0:
+                retry = ""
             lines += [record_note or "Training flight / unranked", "",
-                      "[R] Retry    [M] Mission briefing", self.back]
+                      retry + ("[M] Program" if self.deck.kind else "[M] Mission briefing"), self.back]
+        elif mode == "presets":
+            view = self.deck.program or ProgramView()
+            lines = [f"NEW PROGRAM / SEASON {view.season}", "",
+                     f"{view.count} missions, from a broad sea to the frontier.", "Choose how hard:", "",
+                     "[1] CADET       any number of simulator runs; a crash loses",
+                     "                that mission and the program goes on",
+                     "[2] ASTRONAUT   one simulator run per mission; a crash ends it",
+                     "[3] TEST PILOT  no simulator at all; a crash ends it", ""]
+            if view.status == "active":
+                lines.append("Starting one ends the program you are flying.")
+            lines += ["[ESC] Back"]
+        elif mode == "commit":
+            accent = 8
+            lines = ["REAL FLIGHT / " + mission.name, "",
+                     "This is the real flight: one attempt, no second go.",
+                     "The start differs a little from the simulator.",
+                     "Leaving or losing the connection counts as a crash.", "",
+                     "[Y] Go for landing     [N] Back"]
+        elif mode == "program-board":
+            view = self.deck.program or ProgramView()
+            preset = view.board_preset
+            lines = [f"PROGRAM BOARD / {PRESET[preset][0]} / {view.season}", ""]
+            for i, (name, landed, lost, score, user) in enumerate(view.board, 1):
+                if self.host.ranked and user == self.host.user:
+                    mine = len(lines)
+                lines.append(f"{i:2}. {plain(name, 24):24} {landed}/{view.count} landed  {score:6} pts"
+                             + (f"  {lost} lost" if preset == "cadet" and lost else ""))
+            if not view.board:
+                lines.append("No programs flown with this preset this season.")
+            lines += ["", f"[{self.arrows[0]}] Preset    [B] or [ESC] Back"]
         elif mode == "scores":
             lines = ["BEST PILOTS / " + mission.name, ""]
             for i, (name, score, user) in enumerate(standings or [], 1):
@@ -2717,6 +2924,8 @@ class Display:
         if not compact:
             c.text(x0 + 1, y0 + 3, rule, EDGE, PANEL)
         pip, empty = ("■", "·") if unicode else ("#", ".")
+        program_tab = CHAPTERS[deck.chapter].key == "program"
+        view = deck.program or ProgramView()
         for n, entry in enumerate(chapter_missions(CHAPTERS[deck.chapter], catalog)):
             row, chosen = top + n, entry.key == mission.key
             bg = HIGHLIGHT if chosen else PANEL
@@ -2727,7 +2936,13 @@ class Display:
             label = entry.name.split(" ", 1)[0] if entry.key.startswith("daily-") else entry.name
             c.rich(lx, row, [("[", 9), (str(n + 1), 5), ("] ", 9),
                              (plain(label, 19), (255, 240, 200) if chosen else 7)], bg)
-            if entry.difficulty:
+            if program_tab:
+                step = view.steps.get(n + 1) or {}
+                status = ([(f"{step['score']:>5} pts", 6)] if step.get("result") == "landed" else
+                          [(" LOST", 8)] if step.get("result") else
+                          [(" NEXT", 5)] if view.next() == n + 1 else [(f" {empty}", 9)])
+                c.rich(lx + 22, row, status, bg)
+            elif entry.difficulty:
                 c.rich(lx + 24, row, [(pip * entry.difficulty, 8 if entry.difficulty >= 4 else 5),
                                       (empty * (5 - entry.difficulty), 9)], bg)
                 c.rich(lx + 30, row, medal_parts(medal(entry, deck.bests.get(entry.key, 0)), unicode), bg)
@@ -2744,7 +2959,9 @@ class Display:
         for n, (label, value) in enumerate(stats):
             c.rich(rx + (n % 2) * 18, stats_row + n // 2, [(label + " ", 9), (value, 6)], PANEL)
         daily = CHAPTERS[deck.chapter].key == "daily"
-        if mission.difficulty:
+        if program_tab:
+            self.program_briefing(c, view, mission, rx, rw, stats_row + 2, compact)
+        elif mission.difficulty:
             best = deck.bests.get(mission.key, 0)
             earned = medal(mission, best)
             c.rich(rx, stats_row + 2, [("TODAY " if daily else "BEST ", 9)] +
@@ -2755,7 +2972,9 @@ class Display:
         else:
             c.text(rx, stats_row + 2, "Practice: no medals here", 9, PANEL)
         note = record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT")
-        if daily:
+        if program_tab:
+            notes = []
+        elif daily:
             notes = textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw)
         elif " / " in note:
             # "LABEL / detail" reads as a heading and its line, not wrapped mid-phrase.
@@ -2764,7 +2983,8 @@ class Display:
             notes = textwrap.wrap(note, rw)
         for n, line in enumerate(notes[:2]):
             c.text(rx, stats_row + 4 + n, plain(line, rw), 12, PANEL)
-        keys = f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual"
+        keys = (f"[{sideways}] Chapter  [S] Simulator  [ENTER] Real flight  [N] New  [B] Board" if program_tab else
+                f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual")
         back = "[P] Pilot record    " + self.back
         if compact:
             c.annotated(lx, y0 + box_h - 3, keys, PANEL, box_w - 6)
@@ -2776,6 +2996,28 @@ class Display:
                     PANEL, box_w - 6)
         c.annotated(lx, y0 + 17, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
         c.annotated(lx, y0 + 18, back, PANEL, box_w - 6)
+
+    def program_briefing(self, c: Canvas, view: ProgramView, mission: Mission, x: int, width: int, row: int,
+                         compact: bool):
+        """Under a program mission's briefing: the program, and what flying it now means."""
+        if not view.ready:
+            lines = [("Programs need a pilot record.", 9), ("Practice callers cannot fly one.", 9)]
+        elif view.preset is None:
+            lines = [(f"SEASON {view.season}: {view.count} missions", 5), ("[N] Start a program", 6)]
+        else:
+            landed = sum(1 for step in view.steps.values() if (step or {}).get("result") == "landed")
+            lines = [(f"{PRESET[view.preset][0]} / {landed} of {view.count} landed / {view.score} pts", 5)]
+            mine = int(mission.key.rsplit("-", 1)[1])
+            if view.status != "active":
+                lines.append(("PROGRAM COMPLETE" if view.status == "complete" else "PROGRAM OVER", 6 if view.status == "complete" else 8))
+            elif mine != view.next():
+                lines.append(("Flown." if (view.steps.get(mine) or {}).get("result") else "Not yet: fly the next first.", 9))
+            else:
+                left = view.runs_left(mine)
+                lines.append((("SIMULATOR any number of runs" if left is None else f"SIMULATOR {left} run"
+                               + ("" if left == 1 else "s") + " left"), 12))
+        for n, (text, color) in enumerate(lines[:2 if compact else 3]):
+            c.text(x, row + n, plain(text, width), color, PANEL)
 
     def record(self, c: Canvas, catalog: tuple):
         """The Pilot Record: the career on one tab, the achievements on the other."""
@@ -3048,7 +3290,8 @@ class Display:
         c.fill(0, 0, width, 2)
         c.text(0, 2, ("─" if unicode else "-") * width, rule, PANEL)
         c.rich(2, 0, _gradient("L U N A R   L A N D E R", (255, 240, 200), (232, 160, 58)), PANEL)
-        flight_label = [("FLIGHT ", 9), (plain(mission.name, 24), 5)]
+        kind = {"sim": [("SIMULATOR ", 12)], "real": [("LIVE ", 8)]}.get(self.deck.kind, [("FLIGHT ", 9)])
+        flight_label = kind + [(plain(mission.name, 24), 5)]
         c.rich(width - 2 - sum(_cells(t) for t, _ in flight_label), 0, flight_label, PANEL)
         c.rich(2, 1, [("PILOT ", 9), (self.host.handle, 7), ("  ", 9),
                       (career(self.deck.bests, self.catalog).rank, 5)], PANEL, width // 2)
@@ -3156,10 +3399,22 @@ class Announcer:
         self.standings(catalog)
 
     def achievements(self, keys):
-        """Silver and gold achievements earned live; bronze ones stay quiet."""
+        """Silver and gold achievements earned live; bronze ones stay quiet. A
+        completed program is announced whole instead (`program`)."""
         for key in keys:
-            if ACHIEVEMENT[key].tier in ("SILVER", "GOLD"):
+            if ACHIEVEMENT[key].tier in ("SILVER", "GOLD") and not key.startswith("program-"):
                 self.event("achievement", ACHIEVEMENT[key].name)
+
+    def program(self, preset: str, landed: int, count: int, score: int):
+        self.event("achievement", f"Program complete: {PRESET[preset][0].title()}, {landed} of {count}, {score:,} points")
+
+    def season(self, season: str, count: int):
+        """A new season, when the node's first program in it starts. NetBBS takes
+        this only once it lists `season` among the events it accepts."""
+        if self.host.event_types and "season" in self.host.event_types:
+            month = date.fromisoformat(season + "-01").strftime("%B")
+            self.write({"event": {"type": "season", "title": plain(
+                f"{count} missions, through {month}", self.host.title_max)}}, self.EVENT_MAX)
 
     def event(self, kind: str, title: str):
         if self.host.event_types is None or kind in self.host.event_types:
@@ -3243,6 +3498,103 @@ class Game:
         self.unlocked: list[str] = []
         self.record_tab = self.record_scroll = 0
         self.rarity: tuple[dict, int] = ({}, 0)
+        # Programs: the season (the node-local month), the open program and its
+        # missions, and what kind of flight is up ("" ranked, "sim" or "real").
+        self.season = self.day[:7]
+        self.program: dict | None = None
+        self.steps: dict[int, dict] = {}
+        self.kind = ""
+        self.board: list = []
+        self.board_preset = "cadet"
+        if self.records is not None and self.host.ranked:
+            try:
+                self.program = self.records.program(self.host)
+                if self.program:
+                    self.steps = self.records.program_steps(self.program["id"])
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+        self.missions = self.catalog()
+
+    def catalog(self) -> tuple[Mission, ...]:
+        """Every mission on offer: the authored ones and today's dailies, and the
+        missions of the open program's season (or of this season)."""
+        return missions(self.day, self.clock.date_format) + program_missions(
+            self.program["season"] if self.program else self.season)
+
+    def program_view(self) -> ProgramView:
+        program = self.program or {}
+        season = program.get("season", self.season)
+        return ProgramView(self.records is not None and self.host.ranked, season, len(program_missions(season)),
+                           program.get("preset"), program.get("status", ""), program.get("score", 0),
+                           self.steps, tuple(self.board), self.board_preset)
+
+    def on_program_tab(self) -> bool:
+        return CHAPTERS[self.chapter].key == "program"
+
+    def program_mission(self) -> int:
+        return int(self.mission.key.rsplit("-", 1)[1])
+
+    def start_program(self, preset: str):
+        try:
+            program, first = self.records.program_start(self.host, self.season, preset)
+            self.program = self.records.program(self.host)
+            self.steps = {}
+        except sqlite3.Error as exc:
+            print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+            return
+        self.missions = self.catalog()
+        self.cursor[self.chapter] = 0
+        self.select()
+        if first and self.announcer is not None:
+            self.announcer.season(self.season, len(program_missions(self.season)))
+
+    def end_program_flight(self, outcome: str):
+        """Settle a simulator run or the real attempt ("landed", "crashed" or "aborted")."""
+        mission = self.program_mission()
+        if self.kind == "sim":
+            self.count({"sim_flights": 1, "sim_seconds": self.flight.elapsed}, {}, {})
+            try:
+                self.records.program_sim(self.program["id"], mission, self.flight.elapsed)
+                self.steps = self.records.program_steps(self.program["id"])
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+            self.unlocked = self.grant(counter_feats(self.counters))
+            left = self.program_view().runs_left(mission)
+            result = (f"landed, {self.flight.score(self.mission.difficulty)} points" if outcome == "landed"
+                      else "crashed" if outcome == "crashed" else "abandoned")
+            self.record_note = f"SIMULATOR: {result}" + ("" if left is None else f", {left} left")
+            return
+        score = self.flight.score(self.mission.difficulty) if outcome == "landed" else 0
+        status = self.program["status"]
+        try:
+            status = self.records.program_end(self.program["id"], mission, "lost" if outcome == "aborted" else outcome,
+                                              score)
+            self.steps = self.records.program_steps(self.program["id"])
+        except sqlite3.Error as exc:
+            print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+        self.program = {**self.program, "status": status, "score": self.program["score"] + score}
+        self.settle(outcome)
+        count = len(program_missions(self.program["season"]))
+        landed = sum(1 for step in self.steps.values() if step.get("result") == "landed")
+        preset = self.program["preset"]
+        if status == "complete":
+            earned = {f"program-{preset}"}
+            if preset == "cadet" and landed == count:
+                earned.add("flawless")
+            if preset == "astronaut" and not sum(step.get("sim_runs", 0) for step in self.steps.values()):
+                earned.add("never-trained")
+            new = self.grant(earned)
+            self.unlocked += new
+            if self.announcer is not None:
+                self.announcer.achievements(new)
+                self.announcer.program(preset, landed, count, self.program["score"])
+            self.record_note = f"PROGRAM COMPLETE: {landed} of {count} landed, {self.program['score']} points"
+        elif status == "over":
+            self.record_note = f"PROGRAM OVER: {landed} of {count} landed, {self.program['score']} points"
+        elif outcome == "landed":
+            self.record_note = f"MISSION {mission} LANDED, {score} points: {count - mission} to go"
+        else:
+            self.record_note = f"MISSION {mission} LOST: the program goes on"
 
     def shelf(self) -> tuple[Mission, ...]:
         """The missions on the selected chapter's tab."""
@@ -3272,10 +3624,8 @@ class Game:
             self.held.setdefault(key, now)
         return new
 
-    def settle(self, outcome: str) -> list[str]:
-        """Count a finished flight ("landed", "crashed" or "aborted") and award
-        what it earned; announce the notable ones. Returns the new achievements."""
-        added, lowest, highest = flight_log(self.mission, self.flight, outcome)
+    def count(self, added: dict, lowest: dict, highest: dict):
+        """Add to the running counters: in the records, or for this session."""
         if self.records is not None and self.host.ranked:
             try:
                 self.records.log(self.host, added, lowest, highest)
@@ -3284,6 +3634,11 @@ class Game:
                 print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
         else:
             self.counters = apply_log(self.counters, added, lowest, highest)
+
+    def settle(self, outcome: str) -> list[str]:
+        """Count a finished flight ("landed", "crashed" or "aborted") and award
+        what it earned; announce the notable ones. Returns the new achievements."""
+        self.count(*flight_log(self.mission, self.flight, outcome))
         self.unlocked = []
         if self.mission.difficulty:
             self.unlocked = self.grant(flight_feats(self.mission, self.flight) | counter_feats(self.counters)
@@ -3292,6 +3647,14 @@ class Game:
                 self.announcer.achievements(self.unlocked)
         return self.unlocked
 
+    def load_board(self):
+        self.board = []
+        if self.records is not None:
+            try:
+                self.board = self.records.program_board(self.host, self.program_view().season, self.board_preset)
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+
     def logbook(self) -> Logbook:
         return Logbook(self.counters, self.held, *self.rarity, self.record_tab, self.record_scroll,
                        self.clock.date_format, self.clock.zone)
@@ -3299,14 +3662,17 @@ class Game:
     def refresh_daily(self):
         day = self.clock.day()
         if day != self.day:
-            self.day = day
-            self.missions = missions(day, self.clock.date_format)
+            self.day, self.season = day, day[:7]
+            self.missions = self.catalog()
             self.select()
 
-    def launch(self):
+    def launch(self, kind: str = "", flown: Mission | None = None):
+        """Fly the chosen mission: ranked (or practice), a simulator run ("sim"),
+        or a program's real attempt ("real") as `flown`, its varied start."""
         self.refresh_daily()
+        self.kind = kind
         self.unlocked = []
-        self.flight = self.mission.launch()
+        self.flight = (flown or self.mission).launch()
         self.mode = "launch" if self.scenes else "flying"
         self.scene_age = self.accumulator = 0
         self.record_note = self.ranking_note()
@@ -3331,7 +3697,10 @@ class Game:
         if self.mode == "confirm":
             if key == "y":
                 if self.flight.status == "flying":
-                    self.settle("aborted")
+                    if self.kind:
+                        self.end_program_flight("aborted")
+                    else:
+                        self.settle("aborted")
                 self.leaving = True
             elif key in ("n", "escape"):
                 self.mode = self.before_quit
@@ -3353,6 +3722,62 @@ class Game:
                 self.mode = self.before_help
             else:
                 self.before_help, self.mode = self.mode, "help"
+            return True
+        if self.mode == "presets":
+            if key in ("1", "2", "3"):
+                self.start_program(PRESETS[int(key) - 1][0])
+                self.mode = "menu"
+            elif key in ("escape", "n"):
+                self.mode = "menu"
+            else:
+                return False
+            return True
+        if self.mode == "commit":
+            if key == "y":
+                flown, change = varied(self.mission, random.Random())
+                try:
+                    ready = self.records.program_real(self.program["id"], self.program_mission(), change)
+                except sqlite3.Error as exc:
+                    print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+                    ready = False
+                if ready:
+                    self.launch("real", flown)
+                else:
+                    self.mode = "menu"
+            elif key in ("n", "escape"):
+                self.mode = "menu"
+            else:
+                return False
+            return True
+        if self.mode == "program-board":
+            if key in ("left", "right", "a", "d"):
+                keys = [preset for preset, *_ in PRESETS]
+                step = -1 if key in ("left", "a") else 1
+                self.board_preset = keys[(keys.index(self.board_preset) + step) % len(keys)]
+                self.load_board()
+            elif key in ("b", "escape"):
+                self.mode = "menu"
+            else:
+                return False
+            return True
+        if self.mode == "menu" and self.on_program_tab() and key in ("enter", "s", "n", "b"):
+            view = self.program_view()
+            if not view.ready:
+                return False
+            if key == "n" or (key == "enter" and view.preset is None):
+                self.mode = "presets"
+            elif key == "b":
+                self.board_preset = view.preset or "cadet"
+                self.load_board()
+                self.mode = "program-board"
+            elif view.next() != self.program_mission():
+                return False
+            elif key == "enter":
+                self.mode = "commit"
+            elif view.runs_left(self.program_mission()) != 0:
+                self.launch("sim")
+            else:
+                return False
             return True
         if self.mode == "menu" and key == "enter":
             self.launch()
@@ -3409,10 +3834,16 @@ class Game:
             self.mode = "paused" if self.mode == "flying" else "flying"
             return True
         if self.mode == "debrief" and key in ("r", "m"):
-            if key == "r":
+            if key == "r" and self.kind == "real":
+                return False
+            if key == "r" and self.kind == "sim":
+                if self.program_view().runs_left(self.program_mission()) == 0:
+                    return False
+                self.launch("sim")
+            elif key == "r":
                 self.launch()
             else:
-                self.mode = "menu"
+                self.mode, self.kind = "menu", ""
                 self.refresh_daily()
                 self.flight = self.mission.launch()
                 self.record_note = self.ranking_note()
@@ -3439,6 +3870,13 @@ class Game:
         while self.accumulator >= DT:
             self.flight.step()
             self.accumulator -= DT
+            if self.flight.status != "flying" and self.kind:
+                # A program flight: never a best, a medal or a promotion.
+                self.award, self.queue = None, []
+                self.end_program_flight(self.flight.status)
+                self.mode = ("landing" if self.flight.status == "landed" else "crash") if self.scenes else "debrief"
+                self.accumulator = self.scene_age = 0
+                break
             if self.flight.status != "flying":
                 saved = False
                 self.award, self.queue = None, []
@@ -3594,12 +4032,14 @@ def run(host: Host, started: float) -> int:
                                          clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30),
                                          game.missions, Deck(game.chapter, game.bests,
                                                              game.records is not None and host.ranked, game.award,
-                                                             tuple(game.unlocked), game.logbook()))
+                                                             tuple(game.unlocked), game.logbook(), game.kind,
+                                                             game.program_view()))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
                     # splash's hold only twinkles, so idling costs little CPU.
-                    if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm", "record"):
+                    if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm", "record",
+                                     "presets", "commit", "program-board"):
                         next_frame = now + 1
                     elif game.mode == "splash" and game.scene_age >= SCENE_SECONDS["splash"]:
                         next_frame = now + .25

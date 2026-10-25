@@ -51,7 +51,8 @@ class MedalTests(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
         catalog = {m.key for m in ll.missions("2026-10-24")}
         dailies = {"daily-2026-10-24-maria", "daily-2026-10-24-highlands", "daily-2026-10-24-frontier"}
-        self.assertEqual(catalog, {k for k in keys if not k.startswith("daily-")} | dailies)
+        # Programs' missions come with the game's catalogue, not the authored one.
+        self.assertEqual(catalog, {k for k in keys if not k.startswith(("daily-", "program-"))} | dailies)
 
     def test_original_keys_and_places_are_kept(self):
         self.assertEqual([m.key for m in ll.missions("2026-10-24")[:9]],
@@ -66,7 +67,9 @@ class MenuTests(unittest.TestCase):
         for key, expected in (("down", "tranquility"), ("s", "serenitatis"), ("up", "tranquility"),
                               ("w", "training"), ("up", "crisium"), ("right", "ridgetop"), ("d", "farside"),
                               ("3", "tsiolkovsky"), ("a", "ridgetop"), ("left", "crisium"),
-                              ("left", game.missions[4].key), ("right", "crisium")):
+                              ("left", ll.chapter_missions(ll.CHAPTERS[-1], game.missions)[0].key),
+                              ("left", game.missions[4].key), ("right", ll.chapter_missions(ll.CHAPTERS[-1], game.missions)[0].key),
+                              ("right", "crisium")):
             self.assertTrue(game.key(key), key)
             self.assertEqual(game.mission.key, expected, key)
         self.assertFalse(game.key("9"))  # no ninth mission on this tab
