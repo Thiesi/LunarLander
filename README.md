@@ -85,7 +85,7 @@ These settings go in the door profile's environment:
 | `DOOR_LL_PIXELS=half` | Draw with half blocks instead of quadrant blocks, for terminal fonts without quadrants (`▖▗▘▝`). |
 | `DOOR_SPLASH=0` or `DOOR_LL_SPLASH=0` | Skip the title splash. `DOOR_SPLASH` is shared with the other native doors. |
 | `DOOR_LL_SCENES=0` | Skip the ignition, touchdown and crash scenes. |
-| `DOOR_LL_DATE_FORMAT` | How the daily challenge shows its date, for example `%d.%m.%Y`. The default is `%Y-%m-%d`. |
+| `DOOR_LL_DATE_FORMAT` | How the daily challenge shows its date, for example `%d/%m/%Y`. Without it, the date follows the node's own format (NetBBS 7.41.0 or later), or ISO `%Y-%m-%d`. |
 
 ## NetBBS game events
 

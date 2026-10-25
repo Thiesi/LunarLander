@@ -77,6 +77,8 @@ class Host:
     # The character set NetBBS converts our output to ("utf-8", "cp437" or
     # "ascii"), when it says (NetBBS #1557); None when it does not.
     charset: str | None = None
+    # The node's date-and-time display format (NetBBS 7.41.0), when it says.
+    datetime_format: str | None = None
 
     @property
     def ranked(self) -> bool:
@@ -136,7 +138,9 @@ class Host:
                        bbs=bbs or "NetBBS",
                        drop=str(Path(path).parent / outbound["directory"]) if events is not None else None,
                        event_types=tuple(t for t in types if isinstance(t, str)) if isinstance(types, list) else None,
-                       title_max=bound("title_max", 80), standings_rows=bound("standings_rows", 10))
+                       title_max=bound("title_max", 80), standings_rows=bound("standings_rows", 10),
+                       datetime_format=data.get("datetime_format") if isinstance(data.get("datetime_format"), str)
+                       and len(data["datetime_format"]) <= 64 else None)
         except (OSError, ValueError, TypeError) as exc:
             raise DoorError(f"Cannot read NetBBS launch metadata: {exc}") from exc
 
@@ -508,6 +512,42 @@ def career(bests: dict[str, int], catalog: tuple[Mission, ...]) -> Career:
                   sum(1 for m in medals if m), medals.count("GOLD"), len(ranked))
 
 
+def date_format_ok(date_format: str) -> bool:
+    """A portable date-only strftime subset; it keeps custom text out of the HUD."""
+    return len(date_format) <= 32 and re.fullmatch(r"(?:%[YymdbBaA]|[ ./,\-])+", date_format) is not None
+
+
+def date_part(datetime_format: str | None) -> str | None:
+    """The date in NetBBS's node-wide date-and-time format (`datetime_format`,
+    NetBBS 7.41.0): the longest run of date directives and the separators
+    between them that no time directive interrupts, trimmed to start and end
+    on a date directive. None when no usable date is left."""
+    if not isinstance(datetime_format, str):
+        return None
+    best: list[str] = []
+    run: list[str] = []
+    for token in re.findall(r"%.|[^%]+|%$", datetime_format) + ["%H"]:
+        if token in ("%Y", "%y", "%m", "%d", "%b", "%B", "%a", "%A"):
+            run.append(token)
+        elif token.startswith("%"):
+            # A time directive (or %%): the run ends; keep it if it holds the most dates.
+            while run and not run[-1].startswith("%"):
+                run.pop()
+            if sum(t.startswith("%") for t in run) > sum(t.startswith("%") for t in best):
+                best = run
+            run = []
+        elif run:
+            run.append(token)
+    candidate = "".join(best)
+    return candidate if candidate and date_format_ok(candidate) else None
+
+
+def daily_format(host: Host) -> str:
+    """How the daily challenge shows its date: the SysOp's DOOR_LL_DATE_FORMAT,
+    else the date in the node's own format, else ISO."""
+    return os.environ.get("DOOR_LL_DATE_FORMAT") or date_part(host.datetime_format) or "%Y-%m-%d"
+
+
 class DailyClock:
     """Calendar boundaries use the host's IANA zone, never a fixed UTC offset."""
     def __init__(self, zone: str = "UTC", date_format: str = "%Y-%m-%d", now=None):
@@ -517,8 +557,7 @@ class DailyClock:
         except (ValueError, ZoneInfoNotFoundError):
             self.zone = timezone.utc
             self.warning = "Node timezone unavailable; daily challenge uses UTC."
-        # Portable date-only strftime subset; keep custom text out of the HUD.
-        if len(date_format) > 32 or not re.fullmatch(r"(?:%[YymdbBaA]|[ ./,\-])+", date_format):
+        if not date_format_ok(date_format):
             date_format = "%Y-%m-%d"
             self.warning = (self.warning + " Invalid date format; using ISO.").strip()
         self.date_format = date_format
@@ -2672,7 +2711,7 @@ def run(host: Host, started: float) -> int:
             records = Records(root / "pilots.db")
         except DoorError as exc:
             print("Lunar Lander: " + plain(str(exc), 200), file=sys.stderr)
-    clock = DailyClock(host.timezone, os.environ.get("DOOR_LL_DATE_FORMAT", "%Y-%m-%d"))
+    clock = DailyClock(host.timezone, daily_format(host))
     if clock.warning:
         print("Lunar Lander: " + clock.warning, file=sys.stderr)
     game = Game(host, records, clock=clock, scenes=os.environ.get("DOOR_LL_SCENES") != "0",
