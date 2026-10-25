@@ -2330,9 +2330,14 @@ class Display:
                 c.fill(0, row, c.width, 1)
 
     def menu_box(self, c: Canvas) -> tuple[int, int, int, int]:
-        """The flight director's card: x, y, width and height."""
-        box_w, box_h = min(76, c.width - 2), 20
-        return (c.width - box_w) // 2, max(1, (c.height - box_h) // 2), box_w, box_h
+        """The flight director's card: x, y, width and height. Centred, the full
+        card clears the instruments from 33 rows; on a shorter screen a compact
+        one sits under the header, its shadow on the instruments' rule at most,
+        and the whole cockpit shows below it."""
+        box_w, y = min(76, c.width - 2), max(1, (c.height - 20) // 2)
+        if y + 20 <= c.height - 7:
+            return (c.width - box_w) // 2, y, box_w, 20
+        return (c.width - box_w) // 2, 2, box_w, 15
 
     def menu(self, c: Canvas, mission: Mission, catalog: tuple, record_note: str, clock_note: str):
         """The flight director: chapter tabs, the pilot's rank, the chapter's
@@ -2340,6 +2345,10 @@ class Display:
         unicode, deck = self.host.unicode, self.deck
         updown, sideways = self.arrows[1], self.arrows[0]
         x0, y0, box_w, box_h = self.menu_box(c)
+        # Compact: no rules, a shorter briefing, and only the menu's own keys; the
+        # flight keys and touchdown limits are on the instruments below it.
+        compact = box_h < 20
+        top = y0 + (3 if compact else 4)
         c.frame(x0, y0, box_w, box_h, "LUNAR LANDER / FLIGHT DIRECTOR", unicode)
         lx, rx = x0 + 3, x0 + 37
         rw = box_w - (rx - x0) - 3
@@ -2361,10 +2370,11 @@ class Display:
         tally = [(f"{ladder.landed}/{ladder.total}", 6), (" landed  ", 9), (str(ladder.golds), 6),
                  (" gold", 9)] + ([("  session only", 12)] if not deck.saved else [])
         c.rich(x0 + box_w - 3 - sum(_cells(t) for t, _ in tally), y0 + 2, tally, PANEL)
-        c.text(x0 + 1, y0 + 3, rule, EDGE, PANEL)
+        if not compact:
+            c.text(x0 + 1, y0 + 3, rule, EDGE, PANEL)
         pip, empty = ("■", "·") if unicode else ("#", ".")
         for n, entry in enumerate(chapter_missions(CHAPTERS[deck.chapter], catalog)):
-            row, chosen = y0 + 4 + n, entry.key == mission.key
+            row, chosen = top + n, entry.key == mission.key
             bg = HIGHLIGHT if chosen else PANEL
             if chosen:
                 c.fill(lx - 1, row, 33, 1, bg)
@@ -2380,24 +2390,26 @@ class Display:
             else:
                 c.text(lx + 24, row, "free", 9, bg)
         # The briefing.
-        c.text(rx, y0 + 4, plain(mission.name, rw), 5, PANEL)
-        for n, line in enumerate(textwrap.wrap(mission.description, rw)[:3]):
-            c.text(rx, y0 + 5 + n, line, 7, PANEL)
+        told = 2 if compact else 3  # lines of description
+        c.text(rx, top, plain(mission.name, rw), 5, PANEL)
+        for n, line in enumerate(textwrap.wrap(mission.description, rw)[:told]):
+            c.text(rx, top + 1 + n, line, 7, PANEL)
         stats = (("PAD", f"{mission.width:.0f} m"), ("FUEL", f"{mission.fuel:.0f} kg"),
                  ("START", f"{mission.altitude:.0f} m"), ("DRIFT", f"{mission.drift:+.0f} m/s"))
+        stats_row = top + 1 + told
         for n, (label, value) in enumerate(stats):
-            c.rich(rx + (n % 2) * 18, y0 + 8 + n // 2, [(label + " ", 9), (value, 6)], PANEL)
+            c.rich(rx + (n % 2) * 18, stats_row + n // 2, [(label + " ", 9), (value, 6)], PANEL)
         daily = CHAPTERS[deck.chapter].key == "daily"
         if mission.difficulty:
             best = deck.bests.get(mission.key, 0)
             earned = medal(mission, best)
-            c.rich(rx, y0 + 10, [("TODAY " if daily else "BEST ", 9)] +
+            c.rich(rx, stats_row + 2, [("TODAY " if daily else "BEST ", 9)] +
                    ([(f"{best} pts ", 6), (earned, MEDAL_COLORS[earned][1])] if earned else [("not landed yet", 9)]),
                    PANEL)
-            c.rich(rx, y0 + 11, [("GOLD ", MEDAL_COLORS["GOLD"][1]), (f"{1750 * mission.difficulty}  ", 6),
+            c.rich(rx, stats_row + 3, [("GOLD ", MEDAL_COLORS["GOLD"][1]), (f"{1750 * mission.difficulty}  ", 6),
                                  ("SILVER ", MEDAL_COLORS["SILVER"][1]), (f"{1400 * mission.difficulty}", 6)], PANEL)
         else:
-            c.text(rx, y0 + 10, "Practice: no medals here", 9, PANEL)
+            c.text(rx, stats_row + 2, "Practice: no medals here", 9, PANEL)
         note = record_note or ("UNRANKED TRAINING" if not mission.difficulty else "RANKED FLIGHT")
         if daily:
             notes = textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw)
@@ -2407,10 +2419,14 @@ class Display:
         else:
             notes = textwrap.wrap(note, rw)
         for n, line in enumerate(notes[:2]):
-            c.text(rx, y0 + 12 + n, plain(line, rw), 12, PANEL)
+            c.text(rx, stats_row + 4 + n, plain(line, rw), 12, PANEL)
+        keys = f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual"
+        if compact:
+            c.annotated(lx, y0 + box_h - 3, keys, PANEL, box_w - 6)
+            c.annotated(lx, y0 + box_h - 2, self.back, PANEL, box_w - 6)
+            return
         c.text(x0 + 1, y0 + 14, rule, EDGE, PANEL)
-        c.annotated(lx, y0 + 15, f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual",
-                    PANEL, box_w - 6)
+        c.annotated(lx, y0 + 15, keys, PANEL, box_w - 6)
         c.annotated(lx, y0 + 16, f"In flight: [W/S {updown}] Thrust  [A/D {sideways}] Tilt  [0-9] Power  [SPACE] Cut",
                     PANEL, box_w - 6)
         c.annotated(lx, y0 + 17, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
