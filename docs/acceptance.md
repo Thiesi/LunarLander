@@ -1,8 +1,26 @@
 # Release acceptance
 
-Target: `v0.3.0`. It is not a claim that every NetBBS transport or target
+Target: `v0.4.0`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.4.0: three dailies and a compact flight director
+
+- 114 tests pass under unittest, Windows / Python 3.14.7 with development-only
+  tzdata. Added: three dailies a day with their keys and names; every daily
+  setting within its chapter's span over a year of dates; a fair approach
+  (inside the field, clear of the ridges, drifting toward the pad); variety and
+  both start sides; reproducibility across processes; the scripted pilot landing
+  sixty days of dailies with over 20 kg of fuel left; the compact flight
+  director's size and contents at 24, 32, 33 and 50 rows, with the instruments
+  visible below it at 80x24.
+- Outside the suite, the scripted pilot landed every daily of two years (2,190
+  flights) with at least 49, 40 and 30 kg of fuel left on the Maria, Highlands
+  and Frontier dailies.
+- Hosted CI with the real NetBBS 7.40.0 runtime on Linux and Windows passed on
+  both changes and on the release commit.
+- Not yet assessed by a human pilot: how the three dailies feel, and whether
+  the Frontier daily is hard enough. Listed below.
 
 ## v0.3.0: classic BBS hosts, the node's date, cleaner cards
 
@@ -123,6 +141,8 @@ before release and remain open:
 
 - v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
   pieces join without seams. NetBBS's web terminal draws them itself.
+- v0.4.0 dailies: a human assessment of the three generated dailies' feel and
+  difficulty, across a few days.
 - v0.2.1 CP437 callers: half blocks once NetBBS sends `charset` (NetBBS #1557).
   Until then, CP437 callers need `DOOR_LL_PIXELS=half` on their node.
 
