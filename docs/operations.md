@@ -13,7 +13,9 @@ In the flight director, up/down (or W/S) choose a mission, left/right (or A/D)
 switch chapter, and digits jump to a mission on the tab; Enter launches. In flight,
 A/D or left/right tilt; W/S or up/down adjust throttle. The setting stays put when you release the key. Digits select
 power from 0 (off) to 9 (full); Space cuts thrust and X levels the craft.
-P pauses; ? opens the manual. Q returns to the BBS, which the screens name using
+P pauses; ? opens the manual. In the flight director, P opens the Pilot Record:
+the career, flight totals and personal records on one tab, achievements on the
+other (left/right switch tabs, up/down scroll, P or Esc goes back). Q returns to the BBS, which the screens name using
 NetBBS's `node_name` (or "NetBBS" when it is absent). During a flight, or while
 paused, Q first asks whether to abandon the attempt; Y leaves and N or Esc carries
 on, with the simulation stopped meanwhile. Ctrl-C and Ctrl-D leave at once.
@@ -47,6 +49,15 @@ Medals and ranks are read from the existing best scores, so pilots from earlier
 releases keep what they earned and no migration is needed. The dailies show
 today's medals but do not count toward rank. Callers without a NetBBS
 identity earn medals for the session only.
+
+Ranked flights also count toward 44 achievements: milestones (landings, time in
+the air, crashes), precision and close-call landings, nine hidden spectacular
+crashes, and career feats from bests (chapters landed and gold, the top rank,
+all three dailies in a day, daily streaks). Achievements that bests already earn
+are awarded quietly the first time a pilot launches this release. The debrief
+names what a flight earned; silver and gold ones are announced through NetBBS
+game events when those are on. The training basin counts as simulator time, not
+as ranked flying.
 The dailies change at midnight in the node's published IANA timezone,
 including daylight-saving transitions. Everyone gets the same three flights for
 a given calendar date, on every node; each has its own leaderboard for the day. An active
@@ -70,8 +81,9 @@ by hand. NetBBS's door guide covers this in
 [Running a newer game release](https://github.com/Thiesi/NetBBS/blob/main/docs/NetBBS-door-guide.md#running-a-newer-game-release).
 First read the release's **NetBBS** line in its notes: run it ahead of the bundled
 copy only when it says the saved data is unchanged, since NetBBS's backups check
-the records database (application ID `0x4C4C0001`, schema 1, tables `pilots` and
-`scores`). If it says the format changed, wait for the NetBBS release that bundles it.
+the records database (application ID `0x4C4C0001`; its schema and tables are in
+the README's Releases section). If it says the format changed, wait for the
+NetBBS release that bundles it: an older NetBBS's backups refuse the new format.
 
 1. Download `lunar_lander.py`, `netbbs.json`, `LICENSE` and `SHA256SUMS` from the
    same tagged release. Verify the checksums before installation. Candidate
@@ -189,8 +201,10 @@ Separate nodes cannot read each other's scores even if they share a directory.
 Prefer separate directories anyway. Active flights have no resumable save; a result
 is committed before the debrief appears. Simultaneous sessions retain the best score.
 
-Schema 1 has application ID `0x4C4C0001`. A newer, incomplete, unrelated or corrupt
-database is refused and preserved. LL says records are unavailable, offers unranked
+The records database has application ID `0x4C4C0001`. Schema 2 keeps pilots and
+their bests, running counters, achievements and Programs; a schema 1 file
+upgrades to it in place on its first open, adding tables only. A newer,
+incomplete, unrelated or corrupt database is refused and preserved. LL says records are unavailable, offers unranked
 play and writes a bounded stderr diagnostic for NetBBS's door-session history.
 A write failure on touchdown clearly says the landing was not saved.
 
