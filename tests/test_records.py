@@ -69,7 +69,7 @@ class RecordTests(unittest.TestCase):
         self.records.close()
         self.records = ll.Records(self.path)
         renamed = ll.Host(node="node-a", user=7, handle="New name")
-        self.assertEqual(self.records.top(renamed, self.mission), [("New name", score)])
+        self.assertEqual(self.records.top(renamed, self.mission), [("New name", score, 7)])
 
     def test_identity_mission_and_practice_isolation(self):
         self.records.save(self.host, self.mission, self.flight)

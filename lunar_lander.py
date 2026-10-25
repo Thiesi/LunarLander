@@ -600,9 +600,10 @@ class Records:
             pilots.setdefault(user, {})[mission] = score
         return pilots
 
-    def top(self, host: Host, mission: Mission) -> list[tuple[str, int]]:
+    def top(self, host: Host, mission: Mission) -> list[tuple[str, int, int]]:
+        """The mission's ten best: handle, score and user id, so a board can mark the viewer's row."""
         self.identify(host)
-        return self.db.execute("SELECT p.handle,s.score FROM scores s JOIN pilots p USING(node,user) WHERE s.node=? AND s.mission=? ORDER BY s.score DESC,s.achieved,s.user LIMIT 10",
+        return self.db.execute("SELECT p.handle,s.score,s.user FROM scores s JOIN pilots p USING(node,user) WHERE s.node=? AND s.mission=? ORDER BY s.score DESC,s.achieved,s.user LIMIT 10",
                                (host.node, mission.key)).fetchall()
 
 
@@ -1911,10 +1912,11 @@ class Display:
         span = self.cockpit(c, flight, mission, remaining, slow)
         unicode = self.host.unicode
         if mode == "menu":
+            self.clear_hud(c, *self.menu_box(c)[1::2])
             c.dim()
             self.menu(c, mission, catalog or missions(), record_note, clock_note)
             return c
-        lines, accent = None, 5
+        lines, accent, mine = None, 5, None
         if mode == "paused":
             lines = ["FLIGHT PAUSED", "", "[P] Resume flight   [?] Manual", self.back, "",
                      "The NetBBS session timer continues while paused."]
@@ -1959,25 +1961,49 @@ class Display:
                       "[R] Retry    [M] Mission briefing", self.back]
         elif mode == "scores":
             lines = ["BEST PILOTS / " + mission.name, ""]
-            lines += [f"{i:2}. {plain(name, 28):28} {score:6} pts  {medal(mission, score) or ''}"
-                      for i, (name, score) in enumerate(standings or [], 1)]
+            for i, (name, score, user) in enumerate(standings or [], 1):
+                if self.host.ranked and user == self.host.user:
+                    mine = len(lines)
+                lines.append(f"{i:2}. {plain(name, 28):28} {score:6} pts  {medal(mission, score) or ''}")
             if not standings:
                 lines.append(record_note or "No landings recorded for this mission yet.")
             lines += ["", "[B] or [ESC] Back to mission briefing"]
         if lines is not None:
-            c.dim()
             box_width = 66
-            c.panel((c.width - box_width) // 2, max(3, (c.height - len(lines) - 1) // 2), box_width,
-                    lines, unicode, accent)
+            x, y = (c.width - box_width) // 2, max(3, (c.height - len(lines) - 1) // 2)
+            self.clear_hud(c, y, len(lines) + 1)
+            c.dim()
+            c.panel(x, y, box_width, lines, unicode, accent)
+            if mine is not None:
+                # The viewer's own row stands out, so nobody has to search for their name.
+                row = c.cells[y + mine]
+                for col in range(x + 1, x + box_width - 1):
+                    char, fg, _ = row[col]
+                    row[col] = (char, (255, 240, 200) if char != " " else fg, HIGHLIGHT)
         return c
+
+    def clear_hud(self, c: Canvas, y: int, height: int):
+        """Blank the header or the instrument panel when a card covers any of
+        its lines, edge to edge, so no gauge reads half-hidden beside the card
+        or loses its label; a block the card misses stays readable. A card
+        that only reaches a block's rule takes just the rule."""
+        covered = set(range(y, y + height + 1))  # and the row its shadow falls on
+        for text, rule in ((range(0, 2), 2), (range(c.height - 6, c.height), c.height - 7)):
+            rows = [*text, rule] if covered & set(text) else [rule] if rule in covered else []
+            for row in rows:
+                c.fill(0, row, c.width, 1)
+
+    def menu_box(self, c: Canvas) -> tuple[int, int, int, int]:
+        """The flight director's card: x, y, width and height."""
+        box_w, box_h = min(76, c.width - 2), 20
+        return (c.width - box_w) // 2, max(1, (c.height - box_h) // 2), box_w, box_h
 
     def menu(self, c: Canvas, mission: Mission, catalog: tuple, record_note: str, clock_note: str):
         """The flight director: chapter tabs, the pilot's rank, the chapter's
         missions on a fixed grid with difficulty and medal, the chosen one briefed."""
         unicode, deck = self.host.unicode, self.deck
         updown, sideways = self.arrows[1], self.arrows[0]
-        box_w, box_h = min(76, c.width - 2), 20
-        x0, y0 = (c.width - box_w) // 2, max(1, (c.height - box_h) // 2)
+        x0, y0, box_w, box_h = self.menu_box(c)
         c.frame(x0, y0, box_w, box_h, "LUNAR LANDER / FLIGHT DIRECTOR", unicode)
         lx, rx = x0 + 3, x0 + 37
         rw = box_w - (rx - x0) - 3
