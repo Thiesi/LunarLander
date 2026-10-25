@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Lunar Lander for NetBBS. Copyright (c) 2026 Thiesi. BSD-2-Clause.
+"""Lunar Lander for NetBBS and classic BBSes. Copyright (c) 2026 Thiesi. BSD-2-Clause.
 
 Runtime dependency: Python 3.11+ standard library. NetBBS owns transport framing;
-this program owns only the native child stdin/stdout stream.
+this program owns only the native child stdin/stdout stream. On a classic BBS it
+reads DOOR32.SYS or DOOR.SYS and uses stdio or the inherited DOOR32 socket.
 """
 from __future__ import annotations
 
 import argparse
 from bisect import bisect_right
-from dataclasses import dataclass, field
+import codecs
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from functools import lru_cache
 import json
@@ -19,6 +21,7 @@ import random
 import re
 import select
 import signal
+import socket
 import sqlite3
 import sys
 import textwrap
@@ -79,6 +82,12 @@ class Host:
     charset: str | None = None
     # The node's date-and-time display format (NetBBS 7.41.0), when it says.
     datetime_format: str | None = None
+    # "netbbs", "classic" (a drop file) or "local"; a classic host never changes size.
+    source: str = "local"
+    # A classic host's inherited DOOR32 socket handle, and the bytes it takes.
+    socket: int | None = None
+    encoding: str = "utf-8"
+    ansi: bool = True
 
     @property
     def ranked(self) -> bool:
@@ -129,7 +138,7 @@ class Host:
             bbs = plain(re.sub(r"[\[\]]", "", name), 24).strip() if isinstance(name, str) else ""
             # An ASCII terminal gets ASCII glyphs whatever the caller's style.
             charset = data.get("charset") if data.get("charset") in ("utf-8", "cp437", "ascii") else None
-            return cls(*geometry, color=data.get("color_depth") if data.get("color_depth") in
+            return cls(*geometry, source="netbbs", color=data.get("color_depth") if data.get("color_depth") in
                        ("16", "256", "truecolor") else "16",
                        unicode=data.get("unicode_style") is True and charset != "ascii", charset=charset,
                        handle=plain(data.get("handle", "Pilot")), node=node, user=user,
@@ -144,6 +153,220 @@ class Host:
         except (OSError, ValueError, TypeError) as exc:
             raise DoorError(f"Cannot read NetBBS launch metadata: {exc}") from exc
 
+    @classmethod
+    def classic(cls, path: str, encoding: str = "auto", color: str | None = None) -> Host:
+        """A caller on a classic BBS, from its DOOR32.SYS or DOOR.SYS. Records are
+        keyed by the caller's record number under DOOR_LL_NODE_ID (one data
+        directory per BBS); the clock and the BBS's name come from the profile."""
+        try:
+            info = drop_file_info(Path(path))
+        except (OSError, ValueError) as exc:
+            # Never echo the file or its path: DOOR.SYS can hold a password.
+            raise DoorError("Cannot read the drop file: " + (
+                "cannot open it" if isinstance(exc, OSError) else str(exc))) from exc
+        encoding = "cp437" if encoding == "auto" else encoding
+        minutes = info["minutes_left"]
+        return cls(80, info["height"], color or "16", True, handle=plain(info["handle"]) or "Pilot",
+                   node=plain(os.environ.get("DOOR_LL_NODE_ID", "classic"), 64), user=info["user_id"],
+                   limit=None if minutes is None else minutes * 60.0,
+                   timezone=os.environ.get("DOOR_LL_TIMEZONE", "UTC"),
+                   bbs=plain(re.sub(r"[\[\]]", "", os.environ.get("DOOR_LL_BBS_NAME", "")), 24).strip() or "BBS",
+                   charset="cp437" if encoding == "cp437" else "utf-8", source="classic",
+                   socket=info["comm_handle"] if info["comm_type"] == 2 else None,
+                   encoding=encoding, ansi=info["ansi"])
+
+
+# ---------------------------------------------------------------------------
+# Classic BBS hosts: DOOR32.SYS and DOOR.SYS, CP437 output and the DOOR32
+# socket. The reader and socket link are adapted from Retro Trivia's and
+# Voidrunner's, which handle the same hosts.
+# ---------------------------------------------------------------------------
+
+def _drop_text(value: str) -> str:
+    """A foreign name with terminal commands and control characters removed."""
+    value = re.sub(r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c|$)"
+                   r"|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c|$)"
+                   r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b[ -/]*[@-~]", "", value)
+    return "".join(ch for ch in value if not unicodedata.category(ch).startswith("C")).strip()
+
+
+def drop_file_info(path: Path) -> dict:
+    """DOOR32.SYS or DOOR.SYS, by name or, renamed, by its contents; CRLF or LF."""
+    raw = path.read_bytes()[:65536]
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp437")
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    lines = [line.strip() for line in lines]
+
+    def number(line: int, minimum: int = 0) -> int:
+        value = lines[line - 1]
+        if not value.isascii() or not value.isdecimal() or len(value) > 10 or int(value) < minimum:
+            raise ValueError(f"invalid number on line {line}")
+        return int(value)
+
+    def name(line: int, fallback: str) -> str:
+        return _drop_text(lines[line - 1]) or fallback
+
+    kind = path.name.upper()
+    if kind not in ("DOOR32.SYS", "DOOR.SYS"):
+        if lines and re.fullmatch(r"COM\d+:", lines[0], re.IGNORECASE):
+            kind = "DOOR.SYS"
+        elif len(lines) == 11 and lines[0] in ("0", "1", "2"):
+            kind = "DOOR32.SYS"
+        else:
+            raise ValueError("unrecognized drop-file format")
+    if kind == "DOOR32.SYS":
+        if len(lines) < 11:
+            raise ValueError("DOOR32.SYS needs 11 lines")
+        comm_type, emulation = number(1), number(10)
+        if comm_type not in (0, 1, 2) or emulation not in (0, 1, 2, 3, 4):
+            raise ValueError("invalid DOOR32 communications type or emulation")
+        number(3)
+        number(8)
+        number(11, 1)
+        # Emulation 0 is plain ASCII; 1-4 (ANSI, Avatar, RIP, Max) all take ANSI.
+        return {"kind": kind, "user_id": number(5, 1), "handle": name(7, name(6, "Guest")),
+                "height": 24, "ansi": emulation != 0, "minutes_left": number(9),
+                "comm_type": comm_type, "comm_handle": number(2)}
+    if len(lines) < 31:
+        raise ValueError("DOOR.SYS needs at least 31 lines")
+    if not re.fullmatch(r"COM\d+:", lines[0], re.IGNORECASE):
+        raise ValueError("invalid DOOR.SYS communications port")
+    graphics = lines[19].upper()
+    if graphics not in ("GR", "NG", "7E"):
+        raise ValueError("invalid DOOR.SYS graphics mode")
+    return {"kind": kind, "user_id": number(26, 1),
+            "handle": name(36, name(10, "Guest")) if len(lines) >= 36 else name(10, "Guest"),
+            "height": min(200, number(21, 1)), "ansi": graphics == "GR", "minutes_left": number(19),
+            "comm_type": 0, "comm_handle": 0}
+
+
+# What CP437 lacks among the glyphs the game draws, each by one of the same
+# width that it has. Its arrows, ► and • sit on control bytes, so they become text.
+CP437_GLYPHS = str.maketrans({
+    "╭": "┌", "╮": "┐", "╰": "└", "╯": "┘", "━": "─", "┃": "│",
+    "←": "<", "→": ">", "↑": "^", "↓": "v", "►": ">", "●": "∙",
+    "▘": "▀", "▝": "▀", "▖": "▄", "▗": "▄", "▚": "▀", "▞": "▀",
+    "▛": "█", "▜": "█", "▙": "█", "▟": "█",
+})
+
+
+def _fold(error: UnicodeEncodeError):
+    """Anything else CP437 lacks (a caller's name, say) as its ASCII letters,
+    keeping its columns."""
+    out = []
+    for char in error.object[error.start:error.end]:
+        width = 2 if unicodedata.east_asian_width(char) in "WF" else 1
+        folded = unicodedata.normalize("NFKD", char).encode("ascii", "ignore").decode("ascii")
+        out.append(folded[:width].ljust(width, "?"))
+    return "".join(out), error.end
+
+
+codecs.register_error("lunar_lander_fold", _fold)
+
+
+def encode_output(text: str, encoding: str) -> bytes:
+    if encoding == "cp437":
+        return text.translate(CP437_GLYPHS).encode("cp437", "lunar_lander_fold")
+    return text.encode("utf-8")
+
+
+class SocketLink:
+    """A classic BBS caller's connection, through this process's inherited
+    DOOR32 handle. Telnet commands are filtered out, a literal 0xFF is
+    doubled on output, and CR NUL or CR LF is one Enter. On return only our
+    handle closes; the host keeps its connection."""
+
+    def __init__(self, handle: int):
+        self.socket = socket.socket(fileno=handle)
+        self.mode = "text"
+        self.lost = False
+        self.after_cr = False
+
+    def waiting(self, timeout: float) -> bool:
+        if self.lost:
+            return True
+        try:
+            return bool(select.select([self.socket], [], [], timeout)[0])
+        except OSError:
+            self.lost = True
+            return True
+
+    def read(self, timeout: float) -> bytes | None:
+        """Data bytes, None when none came, or b"" once the caller is gone."""
+        data = bytearray()
+        wait = timeout
+        for _ in range(4096):
+            if self.lost:
+                return bytes(data) or b""
+            if not self.waiting(wait):
+                break
+            wait = 0
+            try:
+                chunk = self.socket.recv(256)
+            except BlockingIOError:
+                continue
+            except OSError:
+                self.lost = True
+                continue
+            if not chunk:
+                self.lost = True
+                continue
+            for n in chunk:
+                if self.mode == "option":
+                    self.mode = "text"
+                elif self.mode == "sub":
+                    self.mode = "sub_iac" if n == 255 else "sub"
+                elif self.mode == "sub_iac":
+                    self.mode = "text" if n == 240 else "sub"
+                elif self.mode == "iac":
+                    self.mode = "option" if n in (251, 252, 253, 254) else "sub" if n == 250 else "text"
+                    if n == 255:
+                        data.append(n)
+                elif n == 255:
+                    self.mode = "iac"
+                elif self.after_cr and n in (0, 10):
+                    self.after_cr = False
+                else:
+                    self.after_cr = n == 13
+                    data.append(n)
+            if len(data) >= 256:
+                break
+        return bytes(data) or None
+
+    def write(self, data: bytes):
+        if self.lost:
+            raise ConnectionResetError("caller disconnected")
+        pending = memoryview(data.replace(b"\xff", b"\xff\xff"))
+        try:
+            while pending:
+                select.select([], [self.socket], [])
+                try:
+                    sent = self.socket.send(pending)
+                except BlockingIOError:
+                    continue
+                if not sent:
+                    raise ConnectionResetError("caller disconnected")
+                pending = pending[sent:]
+        except OSError as exc:
+            self.lost = True
+            raise ConnectionResetError("caller disconnected") from exc
+
+    def close(self):
+        # Enter may be the last key before returning: take its CR NUL / CR LF
+        # trailer, but leave the host's next command alone.
+        if self.after_cr and not self.lost:
+            try:
+                if self.waiting(0.25) and self.socket.recv(1, socket.MSG_PEEK) in (b"\x00", b"\n"):
+                    self.socket.recv(1)
+            except OSError:
+                pass
+        self.socket.close()
+
 
 class Keys:
     """Incremental ANSI/SS3 decoder. Escape tails never become flight commands."""
@@ -151,6 +374,7 @@ class Keys:
     def __init__(self):
         self.buffer = bytearray()
         self.since = 0.0
+        self.after_cr = False
 
     def feed(self, data: bytes, now: float) -> list[str]:
         if not self.buffer:
@@ -161,6 +385,10 @@ class Keys:
             first = self.buffer[0]
             if first != 27:
                 del self.buffer[0]
+                # A terminal's CR LF (or CR NUL) is one Enter, not two.
+                after_cr, self.after_cr = self.after_cr, first == 13
+                if after_cr and first in (0, 10):
+                    continue
                 if first in (3, 4):
                     result.append("abort")
                 elif first in (10, 13):
@@ -189,16 +417,22 @@ class Keys:
 
 
 class Terminal:
-    """Nonblocking input and reversible local-terminal setup; no reader thread."""
+    """Nonblocking input and reversible local-terminal setup; no reader thread.
+    A classic BBS's DOOR32 socket stands in for stdio when the host passes one."""
 
-    def __init__(self):
-        self.fd = sys.stdin.fileno()
-        self.console = os.name == "nt" and sys.stdin.isatty()
+    def __init__(self, host: Host | None = None):
+        host = host or Host()
+        self.encoding, self.ansi = host.encoding, host.ansi
+        self.link = SocketLink(host.socket) if host.socket is not None else None
+        self.fd = sys.stdin.fileno() if self.link is None else -1
+        self.console = self.link is None and os.name == "nt" and sys.stdin.isatty()
         self.saved = None
         self.windows_mode = None
 
     def __enter__(self):
-        if os.name != "nt" and os.isatty(self.fd):
+        if self.link is not None:
+            pass
+        elif os.name != "nt" and os.isatty(self.fd):
             import termios
             import tty
             self.saved = termios.tcgetattr(self.fd)
@@ -212,11 +446,14 @@ class Terminal:
                                                  ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong), ctypes.c_void_p]
             self.kernel.PeekNamedPipe.restype = ctypes.c_int
             self.handle = msvcrt.get_osfhandle(self.fd)
-        self.write("\x1b[0m\x1b[?25l\x1b[2J\x1b[H")
+        if self.ansi:
+            self.write("\x1b[0m\x1b[?25l\x1b[2J\x1b[H")
         return self
 
     def read(self, timeout: float = 0.02) -> bytes | None:
         """None means no key yet; empty bytes means caller disconnected."""
+        if self.link is not None:
+            return self.link.read(timeout)
         if os.name != "nt":
             if not select.select([self.fd], [], [], timeout)[0]:
                 return None
@@ -248,15 +485,22 @@ class Terminal:
         return None
 
     def write(self, text: str):
-        sys.stdout.buffer.write(text.encode("utf-8"))
+        data = encode_output(text, self.encoding)
+        if self.link is not None:
+            self.link.write(data)
+            return
+        sys.stdout.buffer.write(data)
         sys.stdout.buffer.flush()
 
     def __exit__(self, *_):
         try:
-            self.write("\x1b[0m\x1b[?25h\x1b[2J\x1b[H")
+            if self.ansi:
+                self.write("\x1b[0m\x1b[?25h\x1b[2J\x1b[H")
         except OSError:
             pass
         finally:
+            if self.link is not None:
+                self.link.close()
             if self.saved is not None:
                 import termios
                 termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
@@ -2727,7 +2971,13 @@ def run(host: Host, started: float) -> int:
     budget = CpuBudget()
     cpu_left = None
     try:
-        with Terminal() as terminal:
+        with Terminal(host) as terminal:
+            if not host.ansi:
+                # Real-time flight needs cursor addressing; say so rather than garble.
+                terminal.write("Lunar Lander needs an ANSI terminal. Turn on ANSI in your\r\n"
+                               "terminal or BBS settings and try again.\r\n")
+                time.sleep(3)
+                return 0
             data = None
             if game.mode == "splash":
                 # Keys typed ahead belong to the game, not to skipping a title card:
@@ -2745,7 +2995,7 @@ def run(host: Host, started: float) -> int:
                     cpu_left = budget.remaining(now)
                     if cpu_left == 0:
                         break
-                    updated = Host.load(host.path)
+                    updated = host if host.source == "classic" else Host.load(host.path)
                     if (updated.width, updated.height, updated.color, updated.unicode) != (host.width, host.height, host.color, host.unicode):
                         display = Display(updated)
                     host = updated
@@ -2796,9 +3046,23 @@ def main() -> int:
     started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=VERSION)
-    parser.parse_args()
+    parser.add_argument("drop_file", nargs="?", help="a classic BBS's DOOR32.SYS or DOOR.SYS")
+    parser.add_argument("--encoding", choices=("auto", "utf-8", "cp437"), default="auto",
+                        help="output bytes: CP437 with a drop file and UTF-8 otherwise, unless set")
+    parser.add_argument("--color", choices=("16", "256", "truecolor"),
+                        help="a classic caller's colour depth (default 16)")
+    args = parser.parse_args()
     try:
-        return run(Host.load(os.environ.get("NETBBS_DOOR_INFO")), started)
+        if os.environ.get("NETBBS_DOOR_INFO"):
+            # NetBBS takes precedence, and handles its caller's encoding itself.
+            host = Host.load(os.environ["NETBBS_DOOR_INFO"])
+        elif args.drop_file:
+            host = Host.classic(args.drop_file, args.encoding, args.color)
+        else:
+            host = Host.load(None)
+            if args.encoding == "cp437":
+                host = replace(host, encoding="cp437", charset="cp437")
+        return run(host, started)
     except (BrokenPipeError, ConnectionResetError):
         # Prevent interpreter shutdown from retrying a buffered broken stdout.
         sys.stdout = open(os.devnull, "w")
