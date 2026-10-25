@@ -1043,6 +1043,22 @@ _SUBSAMPLES = tuple((dx, dy) for dy in (-1 / 3, 0, 1 / 3) for dx in (-1 / 3, 0, 
 _ROLE_RANK = {role: n for n, role in enumerate("WwFYOXGgoSsdhLPNnkARD")}
 
 
+FUEL_LOW_SECONDS, FUEL_CRITICAL_SECONDS = 30, 10
+
+
+def hover_seconds(fuel: float, gravity: float = GRAVITY) -> float:
+    """How long `fuel` holds the lander in a hover: the burn that just cancels gravity."""
+    return fuel / (FUEL_FLOW * min(1.0, gravity * (DRY_MASS + fuel) / MAX_THRUST))
+
+
+def fuel_alert(flight: Flight) -> int:
+    """0 while fuel is ample, 1 low, 2 critical and 3 empty, by the hover time left."""
+    if flight.fuel <= 0:
+        return 3
+    left = hover_seconds(flight.fuel, flight.gravity)
+    return 2 if left <= FUEL_CRITICAL_SECONDS else 1 if left <= FUEL_LOW_SECONDS else 0
+
+
 def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
                  size: str = "small", across: int = 1) -> dict[tuple[int, int], str]:
     """Hull, legs and plume as roles, rotated together in square-pixel space.
@@ -1611,6 +1627,8 @@ class Display:
         self.frame = 0
         self._landscape: tuple | None = None
         self.tagline = random.choice(TAGLINES)
+        # The fuel alert shown last, and the frame it began: a new alert flashes.
+        self._alert = (0, 0)
         # Pixels to a cell across: quadrant blocks show two, but need Unicode.
         self.across = 2 if host.unicode and host.pixels == "quad" else 1
 
@@ -1909,7 +1927,7 @@ class Display:
                      "Burn early to slow descent. Tilt against your drift.",
                      "Watch VERTICAL: negative means falling toward the Moon.",
                      "Land with |vertical|<=3, |drift|<=2, |tilt|<=10.",
-                     "Fuel burns only with thrust. An empty tank means coast.",
+                     "Fuel alerts at 30 s, then 10 s of hover. Empty: coast.",
                      "Score = difficulty x (1000 + 500 x fuel fraction",
                      "  + 250 x (1-|V|/3) + 250 x (1-|H|/2)).",
                      "Best per mission; tied scores rank earliest first.",
@@ -2180,14 +2198,36 @@ class Display:
         pad_label_row = view_y + (pad_row + 2) // 2
         if view_y <= pad_label_row < view_y + view_h:
             c.text(max(0, (pad_left + pad_right) // (2 * across) - 1), pad_label_row, "PAD", 6, None)
-        self.instruments(c, flight, mission, altitude, span, remaining, slow)
+        alarm = self.fuel_warning(c, flight, view_y + 1)
+        self.instruments(c, flight, mission, altitude, span, remaining, slow, alarm)
         return span
 
+    def fuel_warning(self, c: Canvas, flight: Flight, row: int) -> bool:
+        """A chip across the top of the view when fuel runs low, where the eye
+        already is: amber and flashing as it appears, then red and flashing
+        while critical. Returns whether the critical flash is lit."""
+        level = fuel_alert(flight) if flight.status == "flying" else 0
+        if level != self._alert[0]:
+            self._alert = (level, self.frame)
+        if not level:
+            return False
+        flashing = level == 2 or (level == 1 and self.frame - self._alert[1] < 30)
+        lit = not flashing or self.frame % 6 < 4
+        if lit:
+            seconds = f"{hover_seconds(flight.fuel, flight.gravity):.0f} S HOVER LEFT"
+            dot = "  ·  " if self.host.unicode else "  -  "
+            text = {1: "LOW FUEL" + dot + seconds, 2: "FUEL CRITICAL" + dot + seconds,
+                    3: "FUEL EXHAUSTED"}[level]
+            color = (255, 186, 60) if level == 1 else rgb(8)
+            c.text(max(0, (c.width - len(text) - 4) // 2), row, f"  {text}  ", (16, 12, 22), color)
+        return level >= 2 and lit
+
     def instruments(self, c: Canvas, flight: Flight, mission: Mission, altitude: float, span: float,
-                    remaining, slow):
+                    remaining, slow, alarm: bool = False):
         width, height = c.width, c.height
         unicode = self.host.unicode
-        rule = (52, 66, 98)
+        # The rules framing the view flash red with a critical fuel alert.
+        rule = rgb(8) if alarm else (52, 66, 98)
         heavy, light = ("━", "─") if unicode else ("=", "-")
         # Header: the wordmark and the flight, on a panel strip.
         c.fill(0, 0, width, 2)
@@ -2215,13 +2255,14 @@ class Display:
                     mark, tint = ("┃" if unicode else "|"), ((240, 240, 240) if n < filled else (120, 132, 160))
                 c.put(x + n, row + 3, mark, tint, PANEL)
 
-        fast, sliding, low = abs(flight.vy) > 3, abs(flight.vx) > 2, flight.fuel < 15
+        fast, sliding, low = abs(flight.vy) > 3, abs(flight.vx) > 2, fuel_alert(flight) > 0
         gauges = (("ALTITUDE", [(f"{altitude:7.1f} m", 7)], min(1.0, altitude / 300), (96, 140, 190), None),
                   ("VERTICAL", [(f"{flight.vy:+7.1f} m/s", 8 if fast else 6)] + ([(" FAST", 8)] if fast else []),
                    abs(flight.vy) / 6, rgb(8) if fast else rgb(6), .5),
                   ("DRIFT", [(f"{flight.vx:+6.1f} m/s", 8 if sliding else 6)] + ([(" WIDE", 8)] if sliding else []),
                    abs(flight.vx) / 4, rgb(8) if sliding else rgb(6), .5),
-                  ("FUEL", [(f"{flight.fuel:5.1f} kg", 8 if low else 5)] + ([(" LOW", 8)] if low else []),
+                  ("FUEL", [(f"{flight.fuel:5.1f} kg", 8 if low else 5)]
+                   + ([(" EMPTY" if flight.fuel <= 0 else " LOW", 8)] if low else []),
                    flight.fuel / max(1, flight.initial_fuel),
                    mix(rgb(8), rgb(5), flight.fuel / max(1, flight.initial_fuel) * 2), None))
         for n, (title, value, fraction, color, limit) in enumerate(gauges):

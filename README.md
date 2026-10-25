@@ -21,6 +21,8 @@ The game includes:
 
 - Rich ANSI landscapes with stars, a distant Earth, and illuminated landing pads.
 - Deterministic lunar physics, fuel management, and precise landing checks.
+- Fuel alerts where you are already looking: an amber warning over the view at
+  30 seconds of hover fuel, then a flashing red one at 10.
 - A training basin and fifteen ranked missions in three chapters (Maria, Highlands,
   Frontier), plus a daily challenge that changes at the NetBBS node's local midnight.
 - Gold, silver and bronze medals for every landing, and a career from Cadet to
