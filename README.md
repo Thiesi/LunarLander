@@ -4,7 +4,7 @@
 
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
-fifteen ranked missions in three chapters, a daily challenge, medals for every
+fifteen ranked missions in three chapters, three daily challenges, medals for every
 safe landing and a career from Cadet to Lunar Ace. Read the drift. Watch the
 fuel. Make both feet count.
 
@@ -31,8 +31,9 @@ itself.
 ## The game
 
 - **Missions:** a training basin and fifteen ranked missions in three chapters
-  (Maria, Highlands, Frontier), plus a daily challenge that changes at the
-  node's local midnight.
+  (Maria, Highlands, Frontier), plus three daily challenges, new at the node's
+  local midnight: one in the manner of each chapter, from a broad sea to a lean
+  frontier run.
 - **Medals and ranks:** gold, silver and bronze for every safe landing, and a
   career from Cadet to Lunar Ace, with a medal ceremony and promotion fireworks.
 - **Flight:** deterministic lunar physics; a landing needs both feet on the pad,
@@ -86,7 +87,7 @@ These settings go in the door profile's environment:
 | `DOOR_LL_PIXELS=half` | Draw with half blocks instead of quadrant blocks, for terminal fonts without quadrants (`▖▗▘▝`). |
 | `DOOR_SPLASH=0` or `DOOR_LL_SPLASH=0` | Skip the title splash. `DOOR_SPLASH` is shared with the other native doors. |
 | `DOOR_LL_SCENES=0` | Skip the ignition, touchdown and crash scenes. |
-| `DOOR_LL_DATE_FORMAT` | How the daily challenge shows its date, for example `%d/%m/%Y`. Without it, the date follows the node's own format (NetBBS 7.41.0 or later), or ISO `%Y-%m-%d`. |
+| `DOOR_LL_DATE_FORMAT` | How the daily challenges show their date, for example `%d/%m/%Y`. Without it, the date follows the node's own format (NetBBS 7.41.0 or later), or ISO `%Y-%m-%d`. |
 
 ## Classic BBS setup
 
@@ -157,7 +158,7 @@ Settings for classic hosts, beside those above:
 | --- | --- |
 | `DOOR_LL_NODE_ID` | Names this BBS in the records (default `classic`). Keep it once set. |
 | `DOOR_LL_BBS_NAME` | The name in "[Q] Return to …" (default "BBS"). |
-| `DOOR_LL_TIMEZONE` | The IANA zone whose midnight starts a new daily challenge (default UTC). |
+| `DOOR_LL_TIMEZONE` | The IANA zone whose midnight starts new daily challenges (default UTC). |
 | `--encoding auto\|utf-8\|cp437` | Output bytes: CP437 with a drop file unless set. |
 | `--color 16\|256\|truecolor` | The caller's colour depth (default 16). |
 

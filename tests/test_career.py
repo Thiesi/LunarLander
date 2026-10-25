@@ -50,11 +50,12 @@ class MedalTests(unittest.TestCase):
         keys = [key for chapter in ll.CHAPTERS for key in chapter.missions]
         self.assertEqual(len(keys), len(set(keys)))
         catalog = {m.key for m in ll.missions("2026-10-24")}
-        self.assertEqual(catalog, {k for k in keys if k != "daily"} | {"daily-2026-10-24"})
+        dailies = {"daily-2026-10-24-maria", "daily-2026-10-24-highlands", "daily-2026-10-24-frontier"}
+        self.assertEqual(catalog, {k for k in keys if not k.startswith("daily-")} | dailies)
 
     def test_original_keys_and_places_are_kept(self):
         self.assertEqual([m.key for m in ll.missions("2026-10-24")[:9]],
-                         ["training", "tranquility", "ridgetop", "needle", "daily-2026-10-24",
+                         ["training", "tranquility", "ridgetop", "needle", "daily-2026-10-24-maria",
                           "copernicus", "hadley", "farside", "polar"])
 
 

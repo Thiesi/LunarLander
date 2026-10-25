@@ -657,17 +657,66 @@ class Mission:
                       gravity=self.gravity)
 
 
+# The day's three challenges, one in the manner of each chapter. Every setting
+# is drawn from the span of that chapter's own missions, easiest to hardest, so
+# a daily asks nothing its chapter does not. One "hardness" draw moves them
+# together, each with a little play, and the harder half of a chapter's span
+# is worth its higher difficulty. Spans are (easiest, hardest):
+DAILY_TIERS = (
+    # key, name, briefing,
+    # difficulty, pad width, start altitude, start offset, drift toward the pad,
+    # fuel, sink, relief floor, relief ceiling
+    ("maria", "MARIA", "Today's sea: a broad pad and a gentle approach.",
+     (1, 2), (90, 60), (210, 300), (40, 200), (3, 8), (85, 80), (-6, -9), (40, 45), (80, 120)),
+    ("highlands", "HIGHLANDS", "Today's highland shelf: rough ground, a narrower pad.",
+     (2, 3), (65, 45), (260, 300), (100, 150), (6, 9), (78, 70), (-6, -8), (45, 60), (115, 160)),
+    ("frontier", "FRONTIER", "Today's frontier run: fast, lean and steep.",
+     (4, 5), (45, 45), (290, 340), (90, 180), (6, 12), (70, 64), (-6, -12), (45, 60), (115, 160)),
+)
+
+
+def daily_missions(day: str, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
+    """The day's three dailies. A pure function of the date: every node and
+    every pilot flies the same three on the same day."""
+    stamp = date.fromisoformat(day).strftime(date_format)
+    dailies = []
+    for n, (key, name, briefing, *spans) in enumerate(DAILY_TIERS):
+        rng = random.Random(f"lunar-lander/daily/{day}/{key}")
+        hardness = rng.random()
+
+        def pick(span, play=.25):
+            easy, hard = span
+            return easy + (hard - easy) * min(1.0, max(0.0, hardness + rng.uniform(-play, play)))
+        difficulties, widths, altitudes, offsets, drifts, fuels, sinks, floors, ceilings = spans
+        width = round(pick(widths))
+        offset, drift, fuel = round(pick(offsets)), round(pick(drifts)), round(pick(fuels))
+        sink = round(pick(sinks))
+        relief = (round(pick(floors)), round(pick(ceilings)))
+        # Clear of the highest ridge, whatever the draws.
+        altitude = max(round(pick(altitudes)), relief[1] + 120)
+        # The pad well inside the field; the approach from either side, drifting
+        # toward the pad as every authored mission does, and starting inside too.
+        center = rng.randint(100 + width // 2, 900 - width // 2)
+        side = rng.choice((-1, 1))
+        if not 60 <= center + side * offset <= 940:
+            side = -side
+        offset = side * min(offset, max(940 - center, center - 60))
+        dailies.append(Mission(
+            f"daily-{day}-{key}", f"{name} {stamp}", briefing,
+            difficulties[0] if hardness < .5 else difficulties[1], center, width, altitude, offset,
+            -side * drift, fuel, int(day.replace("-", "")) * 10 + n, sink, relief))
+    return tuple(dailies)
+
+
 def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
     day = day or datetime.now(timezone.utc).date().isoformat()
-    seed = int(day.replace("-", ""))
-    rng = random.Random(seed)
+    maria, highlands, frontier = daily_missions(day, date_format)
     return (
         Mission("training", "TRAINING BASIN", "A wide pad and generous fuel. Learn to brake early.", 0, 300, 100, 180, 0, 0, 90),
         Mission("tranquility", "TRANQUILITY", "Cancel gentle drift above the broad western basin.", 1, 300, 90, 210, 65, -4, 85, 11),
         Mission("ridgetop", "RIDGE RUN", "Cross the ridge; a narrower pad rewards precision.", 2, 470, 65, 260, 100, -7, 78, 22),
         Mission("needle", "THE NEEDLE", "A tiny foothold. Fast approach. Make every burn count.", 3, 680, 45, 280, -110, 9, 70, 33),
-        Mission("daily-" + day, "DAILY " + date.fromisoformat(day).strftime(date_format), "New at node-local midnight. One best score per pilot.", 2,
-                rng.randint(300, 700), rng.randint(55, 80), 250, 80, -6, 80, seed),
+        maria,
         Mission("copernicus", "COPERNICUS", "A long descent into a broad crater. Budget your fuel.", 2, 220, 65, 300, 140, -5, 85, 44),
         Mission("hadley", "HADLEY RILLE", "Approach the rille from the west. Arrest the drift.", 3, 530, 50, 270, -125, 7, 76, 55),
         Mission("farside", "FAR SIDE", "A fast eastern run toward a small, isolated pad.", 4, 780, 45, 310, -120, 12, 70, 66),
@@ -688,13 +737,15 @@ def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mis
                 sink=-8, relief=(60, 160)),
         Mission("aitken", "AITKEN BASIN", "The Moon's deepest basin. A fast, steep entry.", 5, 820, 45, 340, -160, 10, 68, 166,
                 sink=-12, relief=(45, 130)),
+        highlands,
+        frontier,
     )
 
 
 @dataclass(frozen=True)
 class Chapter:
-    """A tab of the flight director: a name and its missions, by key ("daily" is
-    the day's challenge). A later campaign -- a season, or another world with
+    """A tab of the flight director: a name and its missions, by key ("daily-maria"
+    and the like are the day's challenge in that chapter's manner). A later campaign -- a season, or another world with
     missions of its own gravity -- is more chapters, not new machinery."""
     key: str
     name: str
@@ -706,15 +757,17 @@ CHAPTERS = (
     Chapter("maria", "MARIA", ("training", "tranquility", "serenitatis", "copernicus", "imbrium", "crisium")),
     Chapter("highlands", "HIGHLANDS", ("ridgetop", "descartes", "hadley", "needle", "apennine")),
     Chapter("frontier", "FRONTIER", ("farside", "polar", "tsiolkovsky", "shackleton", "aitken")),
-    Chapter("daily", "DAILY", ("daily",), ranked=False),
+    Chapter("daily", "DAILY", ("daily-maria", "daily-highlands", "daily-frontier"), ranked=False),
 )
 
 
 def chapter_missions(chapter: Chapter, catalog: tuple[Mission, ...]) -> tuple[Mission, ...]:
     by_key = {mission.key: mission for mission in catalog}
-    daily = next((mission for mission in catalog if mission.key.startswith("daily-")), None)
-    return tuple(daily if key == "daily" else by_key[key] for key in chapter.missions
-                 if (daily if key == "daily" else by_key.get(key)) is not None)
+    for mission in catalog:
+        # A daily's key carries its date; the chapter names it by its manner.
+        if mission.key.startswith("daily-"):
+            by_key["daily-" + mission.key.rsplit("-", 1)[1]] = mission
+    return tuple(by_key[key] for key in chapter.missions if key in by_key)
 
 
 # Medals are read from a pilot's best score on a mission, never stored: the
@@ -2316,8 +2369,10 @@ class Display:
             if chosen:
                 c.fill(lx - 1, row, 33, 1, bg)
                 c.text(lx - 1, row, "►" if unicode else ">", 5, bg)
+            # The Daily tab is today's: its list names each daily by its manner, the briefing adds the date.
+            label = entry.name.split(" ", 1)[0] if entry.key.startswith("daily-") else entry.name
             c.rich(lx, row, [("[", 9), (str(n + 1), 5), ("] ", 9),
-                             (plain(entry.name, 19), (255, 240, 200) if chosen else 7)], bg)
+                             (plain(label, 19), (255, 240, 200) if chosen else 7)], bg)
             if entry.difficulty:
                 c.rich(lx + 24, row, [(pip * entry.difficulty, 8 if entry.difficulty >= 4 else 5),
                                       (empty * (5 - entry.difficulty), 9)], bg)
