@@ -1,4 +1,7 @@
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -73,6 +76,37 @@ class DisplayPixelTests(unittest.TestCase):
             self.assertEqual(ll.Display(ll.Host(unicode=False)).across, 1)
         with mock.patch.dict(os.environ, {"DOOR_LL_PIXELS": "half"}):
             self.assertEqual(ll.Display(ll.Host()).across, 1)
+
+    def load(self, **fields):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "door.json"
+            path.write_text(json.dumps({"door_api": 5, "unicode_style": True, **fields}), encoding="utf-8")
+            return ll.Host.load(str(path))
+
+    def test_the_callers_character_set_decides(self):
+        # NetBBS converts our output to the caller's set (NetBBS #1557): quadrants
+        # only reach a UTF-8 terminal; CP437 has half blocks; ASCII gets ASCII glyphs.
+        with mock.patch.dict(os.environ, {"DOOR_LL_PIXELS": ""}):
+            for fields, charset, unicode, across in (({}, None, True, 2),
+                                                     ({"charset": "utf-8"}, "utf-8", True, 2),
+                                                     ({"charset": "cp437"}, "cp437", True, 1),
+                                                     ({"charset": "ascii"}, "ascii", False, 1),
+                                                     ({"charset": "ebcdic"}, None, True, 2),
+                                                     ({"charset": 437}, None, True, 2)):
+                with self.subTest(fields=fields):
+                    host = self.load(**fields)
+                    self.assertEqual((host.charset, host.unicode, ll.Display(host).across),
+                                     (charset, unicode, across))
+
+    def test_a_cp437_caller_never_gets_a_quadrant(self):
+        quadrants = set(ll.QUADRANTS[1:]) - {"▀", "▌", "▐", "▄", "█"}
+        host = ll.Host(132, 50, "256", True, pixels="quad", charset="cp437")
+        for mode in ("flying", "splash", "launch", "landing", "crash", "medal", "promotion"):
+            with self.subTest(mode=mode):
+                flight = ll.training()
+                flight.angle = 15
+                canvas = ll.Display(host).draw(flight, mode, scene_age=1.2)
+                self.assertFalse({cell[0] for row in canvas.cells for cell in row} & quadrants)
 
     def test_every_view_draws_in_quadrants_or_ascii(self):
         quadrants = set(ll.QUADRANTS[1:])
