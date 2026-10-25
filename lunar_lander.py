@@ -1939,7 +1939,7 @@ TAGLINES = (
     "FLY IT LIKE THE TANK IS HALF EMPTY.",
 )
 
-SCENE_SECONDS = {"splash": 5.0, "launch": 1.6, "landing": 2.6, "crash": 2.4, "medal": 3.2, "promotion": 4.4}
+SCENE_SECONDS = {"splash": 5.0, "launch": 3.0, "landing": 2.6, "crash": 2.4, "medal": 3.2, "promotion": 4.4}
 SCENE_MAX = (132, 50)
 SPLASH_PROMPT = "press any key to begin"
 
@@ -2154,13 +2154,14 @@ class Display:
                         "crash": "Telemetry lost. Flight recorder recovered."}[kind]
             ground = pad_y - 1 - feet
             if kind == "launch":
-                # Ignition: a cough of sparks, then the plume steadies and the descent begins.
+                # Ignition: a cough of sparks, then the plume steadies and the descent
+                # begins, slow enough to read the briefing over it.
                 fire = _span(t, .35, .9)
-                y = round(h * .4 + _ease(_span(t, .6, 1.6)) * h * .08)
+                y = round(h * .4 + _ease(_span(t, .6, 2.8)) * h * .08)
                 sprites.append((above(lander_sprite(0, .3 + .6 * fire if fire else 0, t, "large", across), y, pad_y),
                                 pad_c, y))
                 checks = ("GUIDANCE", "ATTITUDE", "THROTTLE", "RANGE")
-                lit = min(len(checks), int(_span(t, .1, 1.2) * (len(checks) + 1)))
+                lit = min(len(checks), int(_span(t, .1, 1.6) * (len(checks) + 1)))
                 parts = []
                 for n, word in enumerate(checks):
                     parts += [(("■ " if unicode else "# "), rgb(6) if n < lit else (50, 62, 92)),

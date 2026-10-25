@@ -273,7 +273,7 @@ class SceneLifecycleTests(unittest.TestCase):
         self.assertTrue(game.key("w"))
         self.assertEqual((game.mode, game.flight.throttle), ("menu", 0))
         game.key("enter")
-        game.tick(2, True)
+        game.tick(ll.SCENE_SECONDS["launch"] + .4, True)
         self.assertEqual((game.mode, game.flight.elapsed), ("flying", 0))
 
     def test_save_commits_before_landing_animation(self):
