@@ -11,7 +11,7 @@ Guide a fragile lander between lunar ridges, manage your descent, and settle
 onto an illuminated pad. Every correction costs fuel; every landing earns its
 place.
 
-**Status: released (v0.1.0).** Run `python lunar_lander.py` locally or
+**Status: released (v0.2.0).** Run `python lunar_lander.py` locally or
 follow the [NetBBS installation and playing guide](docs/operations.md).
 The banner is concept art; the cockpit below is rendered by the game itself.
 See [acceptance evidence and remaining field checks](docs/acceptance.md) and the

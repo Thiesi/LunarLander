@@ -1,10 +1,28 @@
 # Release acceptance
 
-Target: `v0.1.0`, the first release, after four candidates. It is not a claim
-that every NetBBS transport or target operating system has been certified; the
-checks still to be done in the field are listed at the end.
+Target: `v0.2.0`. It is not a claim that every NetBBS transport or target
+operating system has been certified; the checks still to be done in the field
+are listed at the end. v0.1.0's evidence follows v0.2.0's.
 
-## Completed locally
+## v0.2.0: quadrant blocks, fine sprite art, taglines and fuel alerts
+
+- 87 unittest cases, Windows / Python 3.14.7 with development-only tzdata, pass
+  with the default quadrant blocks and again with `DOOR_LL_PIXELS=half`. Added:
+  the quadrant colour split, narrow-column mapping, the fine landers' footprint
+  and tilted symmetry, the stage's composition matching between modes, quadrant
+  or ASCII output in every view, the tagline pick and fit, and the fuel alert
+  levels, flashing, frame alarm, gauge and ASCII form.
+- Half-block mode is unchanged from v0.1.0: the stage and every sprite were
+  compared against v0.1.0's output and matched exactly.
+- NetBBS 7.40.0 from the pinned commit, Windows / Python 3.14.7: all six
+  scenarios passed on each change and on the merged result.
+- Cost of quadrant blocks, 300-frame descent at 256 colours: the 132x50 cockpit
+  rose from about 10 to 14 ms of CPU and from 2.7 to 3.5 KiB per frame; scenes
+  from 9.4 to 12.5 ms. Card screens keep their slow redraw rates, so idle CPU
+  is as in v0.1.0. Timings vary with machine load.
+- The maintainer playtested the tagline and fuel-alert changes before release.
+
+## v0.1.0: completed locally
 
 - 70 unittest cases, Windows / Python 3.14.7 with development-only tzdata: flight model,
   discrete-control successful landings in all missions, daily reproducibility,
@@ -63,6 +81,9 @@ fixed in rc.4, and the rc.4 review's one cosmetic finding (the menu's ranking
 note wrapping mid-phrase) is fixed in v0.1.0. These reports do not identify
 every transport, mission or recovery scenario; the following were not performed
 before release and remain open:
+
+- v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
+  pieces join without seams. NetBBS's web terminal draws them itself.
 
 - Human flight/control/balance assessment of the four added authored missions and animations.
 - rc.4 career: human assessment of the eight new missions and of the medal
