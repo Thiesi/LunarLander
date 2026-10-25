@@ -104,7 +104,14 @@ the same account identity. LL cannot infer guest privileges from the public API.
 in quadrant blocks (`▖▗▘▝▚▞` and kin), two pixels across each cell. Almost every
 current terminal font draws them, as does the NetBBS web terminal; for one that
 does not, set `DOOR_LL_PIXELS=half` in the profile environment to draw with half
-blocks only, as releases up to v0.1.0 did. ASCII glyph mode still requires
+blocks only, as releases up to v0.1.0 did.
+
+CP437 terminals such as SyncTERM have half blocks but no quadrants. When NetBBS
+tells the door the caller's character set (`charset` in the door metadata,
+[NetBBS #1557](https://github.com/Thiesi/NetBBS/issues/1557)), CP437 callers get
+half blocks and ASCII callers ASCII glyphs automatically. A NetBBS that does not
+send it converts quadrants for a CP437 caller to `?`; on such a node, if callers
+use CP437 terminals, set `DOOR_LL_PIXELS=half`. ASCII glyph mode still requires
 ANSI cursor addressing. Plain non-ANSI terminals and classic DOS/DOOR32 launching
 are not supported in this release.
 
@@ -196,6 +203,7 @@ delete a broken database, clear its schema version, or substitute another node's
 | Door cannot start | Check absolute Python/script/install paths and service-account permissions; inspect NetBBS's Last diagnostic |
 | Practice only | Confirm node/account metadata and writable `DOOR_LL_DATA_DIR`; read stderr for the precise database failure |
 | Garbled blocks/colors | Confirm UTF-8 profile and terminal encoding; select a suitable NetBBS glyph/color preference |
+| Question marks in the scenery | A CP437 terminal (SyncTERM) on a NetBBS that does not send the caller's `charset`; set `DOOR_LL_PIXELS=half` |
 | "Exited unexpectedly (code -9)" | The CPU-seconds ceiling killed the door; raise the profile's `cpu_seconds` to 900 and use this release, which exits cleanly before the ceiling |
 | Flight paused for size | Enlarge to 80x24 |
 | Slow link indicator | LL caps physics catch-up to avoid a sudden unseen crash; use a faster terminal connection or smaller window |

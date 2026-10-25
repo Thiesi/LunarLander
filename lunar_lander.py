@@ -74,6 +74,9 @@ class Host:
     # DOOR_LL_PIXELS=half keeps to half blocks, one across, for fonts without quadrants.
     pixels: str = field(default_factory=lambda: "half" if os.environ.get("DOOR_LL_PIXELS", "").strip().lower()
                         == "half" else "quad")
+    # The character set NetBBS converts our output to ("utf-8", "cp437" or
+    # "ascii"), when it says (NetBBS #1557); None when it does not.
+    charset: str | None = None
 
     @property
     def ranked(self) -> bool:
@@ -122,9 +125,11 @@ class Host:
             # The node's display name, for "Return to ..."; brackets would read as hotkeys.
             name = data.get("node_name")
             bbs = plain(re.sub(r"[\[\]]", "", name), 24).strip() if isinstance(name, str) else ""
+            # An ASCII terminal gets ASCII glyphs whatever the caller's style.
+            charset = data.get("charset") if data.get("charset") in ("utf-8", "cp437", "ascii") else None
             return cls(*geometry, color=data.get("color_depth") if data.get("color_depth") in
                        ("16", "256", "truecolor") else "16",
-                       unicode=data.get("unicode_style") is True,
+                       unicode=data.get("unicode_style") is True and charset != "ascii", charset=charset,
                        handle=plain(data.get("handle", "Pilot")), node=node, user=user,
                        limit=limit, path=path,
                        timezone=data.get("timezone") if isinstance(data.get("timezone"), str) else "UTC",
@@ -1629,8 +1634,9 @@ class Display:
         self.tagline = random.choice(TAGLINES)
         # The fuel alert shown last, and the frame it began: a new alert flashes.
         self._alert = (0, 0)
-        # Pixels to a cell across: quadrant blocks show two, but need Unicode.
-        self.across = 2 if host.unicode and host.pixels == "quad" else 1
+        # Pixels to a cell across: quadrant blocks show two, but need Unicode
+        # all the way to the terminal. CP437 has half blocks and no quadrants.
+        self.across = 2 if host.unicode and host.pixels == "quad" and host.charset in (None, "utf-8") else 1
 
     def encode(self, canvas: Canvas) -> str:
         """Only changed cells: the cursor moves only across gaps and a color is
