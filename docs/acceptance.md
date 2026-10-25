@@ -115,6 +115,10 @@ before release and remain open:
   lander were reviewed from renderer captures, not live terminals; ASCII glyph
   mode's large scene lander is legible but busy.
 - Actual Telnet and SSH terminals, including ordinary key repeat and realistic latency.
+- Classic BBS hosts: a real Synchronet (Linux stdio and Windows DOOR32 socket),
+  Mystic and ENiGMA½ launch, including real-time flight over telnet. Drop-file
+  parsing, CP437 output and the socket link are covered by unit and stdio
+  process tests only.
 - Actual browser terminal, control keys and live resize.
 - NetBSD service deployment, permissions/resource limits, two callers and restore drill.
 - Caller disconnect and relaunch with durable records on that installation.

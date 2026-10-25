@@ -2,7 +2,7 @@
 
 # Lunar Lander
 
-A real-time, single-player lunar landing door game for NetBBS. Guide a fragile
+A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, a daily challenge, medals for every
 safe landing and a career from Cadet to Lunar Ace. Read the drift. Watch the
@@ -21,9 +21,10 @@ itself.
 
 - **NetBBS:** bundled since NetBBS v7.41.0. NetBBS ships a tagged release of
   this file, so a NetBBS SysOp has nothing to install.
-- **Other BBS software:** not supported. Lunar Lander speaks only NetBBS's
-  native door API; it reads no DOOR32.SYS or DOOR.SYS, and it needs ANSI cursor
-  addressing.
+- **Other BBS software** (Synchronet, Mystic, ENiGMA½, …): reads DOOR32.SYS and
+  DOOR.SYS, with CP437 or UTF-8 output and stdio or an inherited DOOR32 socket.
+  It needs an ANSI terminal; see [Classic BBS setup](#classic-bbs-setup).
+  Real-host validation is still pending (#13).
 - **Standalone**, for trying it out: `python3 lunar_lander.py`. Local flights
   are practice; no records are kept.
 
@@ -87,6 +88,85 @@ These settings go in the door profile's environment:
 | `DOOR_LL_SCENES=0` | Skip the ignition, touchdown and crash scenes. |
 | `DOOR_LL_DATE_FORMAT` | How the daily challenge shows its date, for example `%d/%m/%Y`. Without it, the date follows the node's own format (NetBBS 7.41.0 or later), or ISO `%Y-%m-%d`. |
 
+## Classic BBS setup
+
+Install Python 3.11+, copy `lunar_lander.py` to a door directory and pass the
+caller's drop-file **filename**, quoted if it contains spaces:
+
+```sh
+python3 /opt/doors/lunarlander/lunar_lander.py /path/to/node/DOOR32.SYS
+```
+
+`DOOR.SYS` works too. Names are matched without case, renamed files are
+recognised by their contents, and CRLF or LF endings are accepted. A malformed
+drop file stops the launch with a message on stderr, never naming the file.
+`NETBBS_DOOR_INFO`, when set, takes precedence.
+
+- **Records:** keyed by the caller's record number, so an alias change keeps a
+  pilot's records. Give each BBS its own `DOOR_LL_DATA_DIR`, shared by all its
+  nodes: different BBSes' record numbers overlap. A shared guest account is one
+  pilot; keep guests out, or accept that they share one record.
+- **Display:** 80 columns, with DOOR.SYS's page length or 24 rows; no live
+  resize. 16 colours unless `--color 256` or `--color truecolor`. CP437 output,
+  in half blocks, unless `--encoding utf-8`; match the host's bridge encoding to
+  it. A caller without ANSI (DOOR32 emulation 0, DOOR.SYS `NG` or `7E`) is told
+  the game needs an ANSI terminal and returned to the BBS.
+- **Time:** the drop file's minutes left; the door warns in the last minute and
+  returns before the host's cutoff.
+- **DOOR32 socket:** with communication type `2`, the door uses the inherited
+  socket handle (Winsock on Windows, a descriptor on POSIX). It filters telnet
+  commands, doubles outgoing 0xFF and takes CR NUL or CR LF as one Enter.
+  Returning closes only its own handle. Configure the host to pass the caller's
+  connected socket to the Python process (DOOR32 line 1 `2`, line 2 the
+  handle); copying a drop file alone does not pass it. This is the path for
+  Synchronet on Windows.
+
+A Unix launcher at `/opt/doors/lunarlander/launch.sh` can set the environment:
+
+```sh
+#!/bin/sh
+export DOOR_LL_DATA_DIR=/var/lib/lunarlander
+export DOOR_LL_BBS_NAME="Moonbase BBS"
+export DOOR_LL_TIMEZONE=Europe/Berlin
+exec /usr/bin/python3 /opt/doors/lunarlander/lunar_lander.py "$1"
+```
+
+These recipes await the real-host checks in #13:
+
+| Host | Stdio launch configuration |
+| --- | --- |
+| Synchronet on Linux | In SCFG's Online Programs, select Native Executable, Standard I/O, DOOR32.SYS (or DOOR.SYS), and drop files in the Node Directory. Command line: `/opt/doors/lunarlander/launch.sh "%f"`. |
+| Mystic on Linux/macOS | Use the `DD` external-program menu command with `/opt/doors/lunarlander/launch.sh "%PDOOR32.SYS"`. `%P` includes the trailing slash. |
+| ENiGMA½ | Use the `abracadabra` menu module with the configuration below. |
+
+```hjson
+config: {
+    name: Lunar Lander
+    dropFileType: DOOR32
+    cmd: /usr/bin/python3
+    args: [ "/opt/doors/lunarlander/lunar_lander.py", "{dropFilePath}" ]
+    io: stdio
+    encoding: cp437
+    env: { DOOR_LL_DATA_DIR: "/var/lib/lunarlander" }
+}
+```
+
+Settings for classic hosts, beside those above:
+
+| Setting | Effect |
+| --- | --- |
+| `DOOR_LL_NODE_ID` | Names this BBS in the records (default `classic`). Keep it once set. |
+| `DOOR_LL_BBS_NAME` | The name in "[Q] Return to …" (default "BBS"). |
+| `DOOR_LL_TIMEZONE` | The IANA zone whose midnight starts a new daily challenge (default UTC). |
+| `--encoding auto\|utf-8\|cp437` | Output bytes: CP437 with a drop file unless set. |
+| `--color 16\|256\|truecolor` | The caller's colour depth (default 16). |
+
+Game events and `!top` are NetBBS features; a classic host gets neither.
+
+Host references: [Synchronet DOOR.SYS](https://wiki.synchro.net/ref:door.sys),
+[Mystic external programs](https://wiki.mysticbbs.com/doku.php?id=menu_commands),
+[ENiGMA½ scripts and native binaries](https://enigma-bbs.github.io/doors/scripts-and-binaries/).
+
 ## NetBBS game events
 
 Under NetBBS `door_api` 5 with game events switched on for this door
@@ -101,8 +181,8 @@ career standings:
 | standings | The node's Career Roster by medal points, at launch and after a landing, when the order has changed |
 
 Nothing earned offline or in an earlier session is reported. Without
-`outbound.events` (standalone play, or events switched off), the door writes
-nothing.
+`outbound.events` (standalone play, a classic BBS, or events switched off), the
+door writes nothing.
 
 ## Development
 

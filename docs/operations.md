@@ -124,8 +124,9 @@ tells the door the caller's character set (`charset` in the door metadata,
 half blocks and ASCII callers ASCII glyphs automatically. A NetBBS that does not
 send it converts quadrants for a CP437 caller to `?`; on such a node, if callers
 use CP437 terminals, set `DOOR_LL_PIXELS=half`. ASCII glyph mode still requires
-ANSI cursor addressing. Plain non-ANSI terminals and classic DOS/DOOR32 launching
-are not supported in this release.
+ANSI cursor addressing. Plain non-ANSI terminals are not supported; classic BBS
+hosts (DOOR32.SYS and DOOR.SYS) are covered in the README's
+[Classic BBS setup](../README.md#classic-bbs-setup).
 
 The opening splash plays for about five seconds: sunrise over the ranges, the
 lander's powered descent onto a lit pad, and the wordmark resolving in. It then
