@@ -147,15 +147,21 @@ an invalid zone or unavailable system timezone database produces a visible warni
 and a bounded stderr diagnostic before falling back to UTC. Install the operating
 system's timezone data to use named zones. The briefing shows the reset timezone.
 
-Set `DOOR_LL_DATE_FORMAT` in the profile environment to match the node's date
-format, for example `%d.%m.%Y`, `%d/%m/%Y` or `%m/%d/%Y`; the default is `%Y-%m-%d`.
-Allowed directives are `%Y`, `%y`, `%m`, `%d`, `%b`, `%B`, `%a`, `%A`, with spaces,
-dots, slashes, commas and hyphens (maximum 32 characters). Month/day names follow
-the process locale. Invalid formats visibly fall back to ISO dates. Date formatting
-never changes the challenge seed or stored record keys. Since v7.41.0, NetBBS also
-publishes the node's timestamp format to doors as `datetime_format`
-([NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545)); this release does
-not read it yet, so the profile setting is still the way to match the node.
+The daily challenge shows its date the way the rest of the node does. Since
+v7.41.0, NetBBS publishes the node's date-and-time format (**Settings ▸ Timestamp
+format**) to doors as `datetime_format`
+([NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545)); LL takes its date
+part, the longest run of date directives and the separators between them, so
+`%d.%m.%Y %H:%M` shows as `%d.%m.%Y`. A format with no usable date, and an older
+NetBBS that does not send it, show ISO dates (`%Y-%m-%d`).
+
+To show a different date than the node, or to match an older node, set
+`DOOR_LL_DATE_FORMAT` in the profile environment, for example `%d/%m/%Y` or
+`%m/%d/%Y`; it always wins. Allowed directives are `%Y`, `%y`, `%m`, `%d`, `%b`,
+`%B`, `%a`, `%A`, with spaces, dots, slashes, commas and hyphens (maximum 32
+characters). Month/day names follow the process locale. An invalid setting
+visibly falls back to ISO dates. Date formatting never changes the challenge seed
+or stored record keys.
 
 NetBBS forwards size changes via republished JSON and SIGUSR1. LL also
 polls metadata to coalesce notifications.
