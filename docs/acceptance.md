@@ -1,8 +1,35 @@
 # Release acceptance
 
-Target: `v0.4.0`. It is not a claim that every NetBBS transport or target
+Target: `v0.5.0`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.5.0: achievements, the Pilot Record and Programs
+
+- **Records schema 2.** A schema 1 file upgrades in place on its first open,
+  adding four tables and keeping every record; tests cover a new file, the
+  upgrade and refusal of anything else. NetBBS 7.41.0's backups accept only
+  schema 1, so this release must not run on a node before the NetBBS release
+  that resolves Thiesi/NetBBS#1561; the final schema is posted there.
+- 145 tests (unittest), Windows / Python 3.14.7 with development-only tzdata.
+  Added: every flight achievement driven by real touchdowns and impacts,
+  counters and career feats (streaks across old and new daily keys), awarding
+  once, quiet retroactive awards, silver and gold announcements only, the
+  Pilot Record's keys and tabs at 80x24 and 132x50; Programs' generation (five
+  to eight climbing missions, the same everywhere), the real flight's variation
+  (start only, landable), one real attempt per mission, each preset's rules, a
+  lost connection counting as a crash, the board, simulator allowances, scoring
+  the program and never the career, completion with its achievements and
+  announcement, and the tab, cards, header and debrief.
+- Outside the suite, the scripted pilot landed every mission of 36 seasons of
+  Programs; the dailies are byte-for-byte unchanged by the shared generator.
+- The launch scene lasts 3 seconds, long enough to read (playtest feedback).
+- Hosted CI with the real NetBBS 7.40.0 runtime on Linux and Windows passed on
+  each change and on the release commit. Locally the real-process tests and the
+  smoke test's 3-second deadline timed out under unrelated machine load, here and
+  on `main` alike; they pass on their own.
+- Not yet assessed by a human pilot: the achievements' thresholds, Programs'
+  difficulty curve and presets, and the Pilot Record at 80x24. Listed below.
 
 ## v0.4.0: three dailies and a compact flight director
 
@@ -141,6 +168,9 @@ before release and remain open:
 
 - v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
   pieces join without seams. NetBBS's web terminal draws them itself.
+- v0.5.0: a human pass over achievements (are any too easy or out of reach?),
+  a full program in each preset, and the Pilot Record at 80x24; a NetBBS
+  backup and restore of schema 2 records once NetBBS supports it (#1561).
 - v0.4.0 dailies: a human assessment of the three generated dailies' feel and
   difficulty, across a few days.
 - v0.2.1 CP437 callers: half blocks once NetBBS sends `charset` (NetBBS #1557).
