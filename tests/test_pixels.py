@@ -22,10 +22,31 @@ class QuadrantTests(unittest.TestCase):
         # Red, blue and two blacks: one bright color stands alone, the other darkens the blacks.
         self.assertIn(ll.quadrant(RED, BLUE, BLACK, BLACK), {("▘", RED, (0, 0, 67)), ("▝", BLUE, (67, 0, 0))})
 
-    def test_widen_doubles_columns_about_the_same_centre(self):
-        self.assertEqual(ll.widen({(0, 0): 1, (-1, 2): 2}, 2), {(0, 0): 1, (1, 0): 1, (-2, 2): 2, (-1, 2): 2})
-        self.assertEqual(ll.lander_roles(0, .7, size="small", across=2),
-                         ll.widen(ll.lander_roles(0, .7, size="small"), 2))
+    def test_narrow_columns_map_both_ways(self):
+        # Square column s is narrow columns 2s and 2s + 1.
+        for s in range(-5, 6):
+            self.assertEqual({ll._column(ll._centre(x, 2), 2) for x in (2 * s, 2 * s + 1)}, {2 * s, 2 * s + 1})
+            self.assertEqual({round(ll._centre(x, 2)) for x in (2 * s, 2 * s + 1)}, {s})
+            self.assertEqual(ll._column(s, 1), s)
+
+    def test_fine_art_matches_the_square_art(self):
+        # The fine landers keep each size's rows and footprint, two columns to one.
+        for size in ("small", "medium", "large"):
+            with self.subTest(size=size):
+                square, fine = ll.LANDERS[size], ll.LANDERS_FINE[size]
+                self.assertEqual(square[1:], fine[1:])
+                self.assertEqual({y for _, y in square[0]}, {y for _, y in fine[0]})
+                self.assertEqual(min(x for x, _ in fine[0]), 2 * min(x for x, _ in square[0]))
+                self.assertEqual(max(x for x, _ in fine[0]), 2 * max(x for x, _ in square[0]) + 1)
+                self.assertTrue(set(fine[0].values()) <= set(ll.LANDER_COLORS) - set(ll._FLAME))
+        for letter, rows in ll._FONT_FINE.items():
+            self.assertEqual([len(row) for row in rows], [12] * 7, letter)
+
+    def test_half_mode_sprites_are_unchanged(self):
+        # The square art draws as before: fixed points from v0.1.0.
+        self.assertEqual(len(ll.medal_sprite("GOLD", 10)), 496)
+        self.assertEqual(sorted(ll.insignia(6, 6))[:3], [(-6, -15), (-6, -14), (-6, -12)])
+        self.assertEqual(len(ll.wordmark(("LUNAR", "LANDER"))["sprite"]), 465)
 
     def test_narrow_pixels_keep_a_tilted_hull_symmetric(self):
         for size in ("small", "medium"):  # the large craft is drawn three-quarter, not symmetric

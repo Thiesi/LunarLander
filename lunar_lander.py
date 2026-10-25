@@ -898,17 +898,22 @@ def blit(canvas: Canvas, pixels: list[list[tuple]], top: int = 0, left: int = 0,
                 cells[left + x] = (" ", 7, a if a == b else mix(a, b, .5))
 
 
-def widen(sprite: dict, across: int) -> dict:
-    """A square-pixel sprite on pixels `across` times narrower: source column s
-    covers columns across*s .. across*s + across - 1."""
-    if across == 1:
-        return sprite
-    return {(x * across + k, y): value for (x, y), value in sprite.items() for k in range(across)}
-
-
 def _centre(x: float, across: int) -> float:
-    """Where narrow pixel column `x` sits in square-pixel units; see `widen`."""
+    """Where narrow pixel column `x` sits in square-pixel units, `across` narrow
+    pixels to a square one: square column s is narrow columns across*s .. across*s + across - 1."""
     return (x + .5) / across - .5
+
+
+def _column(u: float, across: int) -> int:
+    """The narrow pixel column at square-pixel position `u`: `_centre` reversed."""
+    return round((u + .5) * across - .5)
+
+
+def _square(u: float, across: int) -> range:
+    """The narrow columns of a square-pixel particle centred at `u`, placed to
+    the nearest narrow column: a speck keeps its size and moves in finer steps."""
+    left = round(u * across)
+    return range(left, left + across)
 
 
 def above(sprite: dict, y: int, floor: int) -> dict:
@@ -970,6 +975,43 @@ _LANDER_LARGE = ("...DDD....h..........",
                  ".L.......NNN.......L.",
                  "L.......nNNNn.......L",
                  "PPP...............PPP")
+# The same craft drawn two pixels across a cell, for quadrant blocks: the same
+# rows, with twin windows, finer foil and legs that splay a half step at a time.
+_LANDER_SMALL_FINE = ("........hh........",
+                      "......ssssss......",
+                      "....swwWssWwws....",
+                      "....ssssssssss....",
+                      "..kkkkkkkkkkkkkk..",
+                      "..GGgGGgGGgGGgGG..",
+                      "..gGGGGGGGGGGGGg..",
+                      ".LL...nNNNNn...LL.",
+                      "LL..............LL")
+_LANDER_MEDIUM_FINE = ("..........sShhSs..........",
+                       "......ssSSSSSSSSSSss......",
+                       "....RsSWWwwsSSswwWWSsR....",
+                       "......sSSSSSSSSSSSSs......",
+                       "....kkkkkkkkkkkkkkkkkk....",
+                       "..GGgGGgGGgGGGGgGGgGGgGG..",
+                       "..gGGGGGGGGGGGGGGGGGGGGg..",
+                       "..LLkkkkkk..NN..kkkkkkLL..",
+                       "..LL......nNNNNn......LL..",
+                       ".LL....................LL.",
+                       "PPPP..................PPPP")
+_LANDER_LARGE_FINE = ("......DDDDDD........hh....................",
+                      "........AA.......sSSSSss..................",
+                      "........AA...sSSSSSSSSSSssdd..............",
+                      "........AASSSSSSSSssssssssssdddd..........",
+                      "......RRSSSWWWWwwSSSssssssssssddRR........",
+                      "......RRSSSWWWWWwSSSssssssssssddRR........",
+                      "........SSSSSSSSSSssssssssssssdddd........",
+                      "........kkkkkkkkkkkkkkkkkkkkkkkkkk........",
+                      "....GGGgGGGGGgGgggggGGgGggggggoooooooo....",
+                      "....GGGGGgGGgGGgggggggGgGgggggoooooooo....",
+                      "....gGGGGGGgggggGGgGggggggggggoooooooo....",
+                      "....LLkkkkkkkkkkkkNNNNNNkkkkkkkkkkkkLL....",
+                      "..LL..............NNNNNN..............LL..",
+                      "LL..............nnNNNNNNnn..............LL",
+                      "PPPPPP..............................PPPPPP")
 LANDER_COLORS = {
     "h": (214, 218, 228), "S": (230, 233, 240), "s": (172, 180, 196), "d": (102, 110, 130),
     "W": (22, 32, 56), "w": (120, 226, 240), "A": (150, 156, 172), "D": (238, 240, 246),
@@ -993,6 +1035,10 @@ def _sprite(rows: tuple[str, ...], ox: int, oy: int) -> dict[tuple[int, int], st
 LANDERS = {"small": (_sprite(_LANDER_SMALL, 4, 5), 3, 3, 4),
            "medium": (_sprite(_LANDER_MEDIUM, 6, 6), 4, 3, 6),
            "large": (_sprite(_LANDER_LARGE, 10, 8), 6, 6, 8)}
+# Two across: a source column s of the square art is columns 2s and 2s + 1 here.
+LANDERS_FINE = {"small": (_sprite(_LANDER_SMALL_FINE, 8, 5), 3, 3, 4),
+                "medium": (_sprite(_LANDER_MEDIUM_FINE, 12, 6), 4, 3, 6),
+                "large": (_sprite(_LANDER_LARGE_FINE, 20, 8), 6, 6, 8)}
 _SUBSAMPLES = tuple((dx, dy) for dy in (-1 / 3, 0, 1 / 3) for dx in (-1 / 3, 0, 1 / 3))
 _ROLE_RANK = {role: n for n, role in enumerate("WwFYOXGgoSsdhLPNnkARD")}
 
@@ -1004,30 +1050,35 @@ def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
     Each target pixel takes the role most of its nine subsamples land on in the
     upright sprite, so a tilted hull keeps its shape and has no holes, and a
     symmetric hull stays mirror-symmetric when tilted. With `across` 2 the
-    target pixels are half as wide (quadrants), so a tilted edge steps half as far."""
-    roles, _, start, reach_full = LANDERS[size]
+    pixels are half as wide (quadrants) and the craft is its fine art."""
+    roles, _, start, reach_full = (LANDERS_FINE if across == 2 else LANDERS)[size]
     roles = dict(roles)
+    # The plume's core and its flanks, in this grid's columns.
+    core, flanks = ((0,), (-1, 1)) if across == 1 else ((0, 1), (-1, 2))
     if throttle > 0:
         flicker = int(phase * 20) % 3
         length = 1 + size.count("l") + round(throttle * reach_full) + (flicker if size == "large" else flicker // 2)
         for i in range(length):
             heat = i / max(1, length - 1)
-            roles[(0, start + i)] = _FLAME[min(3, int(heat * 3.6))]
+            for x in core:
+                roles[(x, start + i)] = _FLAME[min(3, int(heat * 3.6))]
             wide = heat < .55 if size != "small" else i == 0 and throttle > .55
             if wide:
-                roles[(1, start + i)] = roles[(-1, start + i)] = _FLAME[min(3, int(heat * 3.6) + 1)]
+                for x in flanks:
+                    roles[(x, start + i)] = _FLAME[min(3, int(heat * 3.6) + 1)]
     if not angle:
-        return widen(roles, across)
+        return roles
     a = math.radians(angle)
     cos, sin = math.cos(a), math.sin(a)
-    reach = math.ceil(max(math.hypot(x, y) for x, y in roles)) + 1
+    reach = math.ceil(max(math.hypot(_centre(x, across), y) for x, y in roles)) + 1
     turned = {}
     for ty in range(-reach, reach + 1):
         for tx in range(-reach * across - across + 1, reach * across + across):
             votes: dict[str | None, int] = {}
             for dx, dy in _SUBSAMPLES:
                 sx, sy = _centre(tx + dx, across), ty + dy
-                role = roles.get((round(sx * cos + sy * sin), round(-sx * sin + sy * cos)))
+                u, v = sx * cos + sy * sin, -sx * sin + sy * cos
+                role = roles.get((round((u + .5) * across - .5), round(v)))
                 votes[role] = votes.get(role, 0) + 1
             role = max(votes, key=lambda r: (votes[r], r is not None, -_ROLE_RANK.get(r, 99)))
             if role:
@@ -1052,11 +1103,12 @@ def lander_sprite(angle: float, throttle: float = 0, phase: float = 0, size: str
     return sprite
 
 
-def lander_pixels(angle: float, throttle: float = 0, phase: float = 0, size: str = "small") -> dict:
-    return {point: color for point, (color, _) in lander_sprite(angle, throttle, phase, size).items()}
+def lander_pixels(angle: float, throttle: float = 0, phase: float = 0, size: str = "small",
+                  across: int = 1) -> dict:
+    return {point: color for point, (color, _) in lander_sprite(angle, throttle, phase, size, across).items()}
 
 
-def dust(strength: float, phase: float, spread: int, seed: int = 0) -> dict:
+def dust(strength: float, phase: float, spread: int, seed: int = 0, across: int = 1) -> dict:
     """Regolith thrown sideways along the ground by the plume, at ground level (y=0)."""
     sprite = {}
     for n in range(round(4 + 18 * strength)):
@@ -1064,7 +1116,8 @@ def dust(strength: float, phase: float, spread: int, seed: int = 0) -> dict:
         reach = 2 + _hash(n, int(phase * 10), seed) * spread * (0.4 + strength)
         lift = -int(_hash(n, int(phase * 10) + 7, seed) * (1 + 3 * strength) * (1 - reach / (spread * 1.6 + 3)))
         color = mix((92, 92, 104), (210, 206, 200), strength * (1 - reach / (spread * 1.5 + 3)))
-        sprite[(side * round(reach), min(0, lift))] = (color, "." if lift == 0 else "'")
+        for x in _square(side * reach, across):
+            sprite[(x, min(0, lift))] = (color, "." if lift == 0 else "'")
     return sprite
 
 
@@ -1081,16 +1134,17 @@ def heat(level: float) -> tuple[int, int, int]:
     return _HEAT[-1][1]
 
 
-def explosion(age: float, radius: float, seed: int = 0) -> dict:
+def explosion(age: float, radius: float, seed: int = 0, across: int = 1) -> dict:
     """A fireball, its debris arcing out under lunar gravity, and the smoke after."""
     sprite = {}
     grow = 1 - (1 - min(1.0, age / .45)) ** 3
     r = 1.5 + radius * grow
     cool = max(0.0, 1 - age / 1.5)
     if cool > 0:
+        reach = math.ceil(r * 1.3)
         for y in range(-math.ceil(r), 1):
-            for x in range(-math.ceil(r * 1.3), math.ceil(r * 1.3) + 1):
-                d = math.hypot(x / 1.3, y) / r
+            for x in range(-reach * across, (reach + 1) * across):
+                d = math.hypot(_centre(x, across) / 1.3, y) / r
                 if d <= 1 and _hash(x, y, seed + int(age * 10)) > d * .35:
                     sprite[(x, y)] = (heat((1 - d * .8) * cool), "*" if d < .5 else "+")
     if age > .35:
@@ -1099,14 +1153,17 @@ def explosion(age: float, radius: float, seed: int = 0) -> dict:
             x, y = round((n - 2.5) * 1.6 + math.sin(n + age) * 1.2), -round(r * .6 + puff + n % 2)
             fade = max(0.0, 1 - (age - .35) / 2.2)
             if fade > 0:
-                sprite[(x, y)] = (mix((24, 24, 34), (96, 92, 100), fade), "~")
+                # Smoke stays in square puffs; sparks and debris take the finer grid.
+                for k in range(across):
+                    sprite[(x * across + k, y)] = (mix((24, 24, 34), (96, 92, 100), fade), "~")
     for n in range(12):
         angle = math.pi * (0.08 + 0.84 * _hash(n, 1, seed))
         speed = radius * (1.4 + 1.6 * _hash(n, 2, seed))
         x = math.cos(angle) * speed * age
         y = -math.sin(angle) * speed * age + 0.5 * 9 * age * age
         if y <= 0:
-            sprite[(round(x), round(y))] = (LANDER_COLORS["Gs"[n % 2]] if age < 1.2 else (120, 110, 90), ".")
+            for column in _square(x, across):
+                sprite[(column, round(y))] = (LANDER_COLORS["Gs"[n % 2]] if age < 1.2 else (120, 110, 90), ".")
     return sprite
 
 
@@ -1118,26 +1175,28 @@ _RIBBON = ((34, 52, 120), (34, 52, 120), (236, 236, 240), (196, 40, 52), (196, 4
            (34, 52, 120), (34, 52, 120))
 
 
-def medal_sprite(kind: str, radius: int, shine: float | None = None) -> dict:
+def medal_sprite(kind: str, radius: int, shine: float | None = None, across: int = 1) -> dict:
     """A struck medal on its ribbon, centred on the disc: metal lit from the
     upper left, a bevelled rim, the lander raised in relief, and a band of
     light (`shine`, -1.6..1.6 across the face) when it catches the sun."""
     light, base, dark = MEDAL_COLORS[kind]
     sprite = {}
-    emblem = LANDERS["medium" if radius >= 13 else "small"][0]
+    emblem = (LANDERS_FINE if across == 2 else LANDERS)["medium" if radius >= 13 else "small"][0]
     half = max(3, round(radius * .6))
     for y in range(-radius - round(radius * .9) - 2, -radius + 2):
-        for x in range(-half, half + 1):
-            stripe = _RIBBON[min(len(_RIBBON) - 1, int((x + half) / (2 * half + 1) * len(_RIBBON)))]
-            sprite[(x, y)] = (scale(stripe, 1.1 if x < 0 else .85), "|")
-    for x in range(-half - 1, half + 2):
+        for x in range(-half * across, (half + 1) * across):
+            u = _centre(x, across)
+            stripe = _RIBBON[min(len(_RIBBON) - 1, int(max(0.0, u + half) / (2 * half + 1) * len(_RIBBON)))]
+            sprite[(x, y)] = (scale(stripe, 1.1 if u < 0 else .85), "|")
+    for x in range((-half - 1) * across, (half + 2) * across):
         sprite[(x, -radius + 1)] = (dark, "=")
     for y in range(-radius, radius + 1):
-        for x in range(-radius, radius + 1):
-            d = math.hypot(x, y) / (radius + .3)
+        for x in range(-radius * across, (radius + 1) * across):
+            u = _centre(x, across)
+            d = math.hypot(u, y) / (radius + .3)
             if d > 1:
                 continue
-            nx, ny = x / radius, y / radius
+            nx, ny = u / radius, y / radius
             toward = -(nx + ny) * .7071
             if d > .84:
                 color = mix(dark, light, .5 - .45 * toward)
@@ -1145,7 +1204,7 @@ def medal_sprite(kind: str, radius: int, shine: float | None = None) -> dict:
                 color = mix(dark, light, .55 + .45 * toward)
                 if (x, y - 1) in emblem:
                     color = mix(color, light, .6)
-                elif (x - 1, y - 2) in emblem:
+                elif (x - across, y - 2) in emblem:
                     color = scale(color, .72)
             if shine is not None:
                 band = abs((nx + ny) * .7071 - shine)
@@ -1155,19 +1214,24 @@ def medal_sprite(kind: str, radius: int, shine: float | None = None) -> dict:
     return sprite
 
 
-def sparkle(color) -> dict:
-    """A four-pointed glint."""
-    return {(0, 0): ((255, 255, 255), "*"), (-1, 0): (color, "-"), (1, 0): (color, "-"),
-            (0, -1): (color, "|"), (0, 1): (color, "|")}
+def sparkle(color, across: int = 1) -> dict:
+    """A four-pointed glint; two across, its arms taper."""
+    if across == 1:
+        return {(0, 0): ((255, 255, 255), "*"), (-1, 0): (color, "-"), (1, 0): (color, "-"),
+                (0, -1): (color, "|"), (0, 1): (color, "|")}
+    faint = scale(color, .6)
+    return {(0, 0): ((255, 255, 255), "*"), (1, 0): ((255, 255, 255), "*"),
+            (-1, 0): (color, "-"), (2, 0): (color, "-"), (-2, 0): (faint, "-"), (3, 0): (faint, "-"),
+            (0, -1): (color, "|"), (1, -1): (color, "|"), (0, 1): (color, "|"), (1, 1): (color, "|")}
 
 
 _SHELLS = ((255, 214, 90), (110, 230, 255), (255, 120, 200), (140, 255, 150), (255, 255, 255), (255, 150, 80))
 
 
-def fireworks(t: float, width: int, height: int, seed: int = 0) -> dict:
+def fireworks(t: float, width: int, height: int, seed: int = 0, across: int = 1) -> dict:
     """Shells climbing on a spark trail, bursting into rings that fall under
-    lunar gravity and cool into the night. Positions in pixels of a
-    `width` x `height` sky; a pure function of `t`."""
+    lunar gravity and cool into the night. Positions in pixels of a sky
+    `width` cells by `height` pixel rows, `across` pixels to a cell; a pure function of `t`."""
     sprite = {}
     speed, gravity, life = height * .24, height * .12, 1.4
     for i in range(7):
@@ -1179,7 +1243,8 @@ def fireworks(t: float, width: int, height: int, seed: int = 0) -> dict:
         if 0 <= rise < 1:
             y = ground - (ground - top) * (1 - (1 - rise) ** 2)
             for n, level in enumerate((1, .7, .45, .25)):
-                sprite[(x0, round(y + n))] = (heat(level), "'")
+                for k in range(across):
+                    sprite[(x0 * across + k, round(y + n))] = (heat(level), "'")
             continue
         age = t - start - .55
         if not 0 <= age <= life:
@@ -1189,16 +1254,22 @@ def fireworks(t: float, width: int, height: int, seed: int = 0) -> dict:
             reach = speed * (.75 + .5 * _hash(i, k, seed + 4))
             for lag, fade in ((0, 0), (.08, .35)):
                 a = max(0.0, age - lag)
-                px = round(x0 + math.cos(angle) * reach * a)
                 py = round(top + math.sin(angle) * reach * a + .5 * gravity * a * a)
                 cool = round(min(1.0, (a / life) ** 1.4 + fade) * 5) / 5
                 tint = (255, 255, 255) if a < .12 else mix(color, (20, 20, 40), cool)
-                if 0 <= px < width and 0 <= py < height and (px, py) not in sprite:
-                    sprite[(px, py)] = (tint, "*" if a < .5 else ".")
+                for px in _square(x0 + math.cos(angle) * reach * a, across):
+                    if 0 <= px < width * across and 0 <= py < height and (px, py) not in sprite:
+                        sprite[(px, py)] = (tint, "*" if a < .5 else ".")
     return sprite
 
 
-def insignia(level: int, half: int, shown: float = 1.0) -> dict:
+# The top rank's star, by rows from two above its centre: square pixels, and
+# two across (columns -4..5, the centre between 0 and 1).
+_STAR = ("..#..", ".###.", "#####", ".#.#.", "#...#")
+_STAR_FINE = ("....##....", "...####...", "##########", "..##..##..", "##......##")
+
+
+def insignia(level: int, half: int, shown: float = 1.0, across: int = 1) -> dict:
     """Rank chevrons, one per rank above cadet, stacked from the bottom; a
     star above them for the top rank. `shown` (0..1) reveals them in order."""
     sprite = {}
@@ -1207,15 +1278,17 @@ def insignia(level: int, half: int, shown: float = 1.0) -> dict:
         if j >= shown * count:
             break
         fresh = j + 1 > shown * count - .5
-        for dx in range(-half, half + 1):
-            top = -3 * j - round((half - abs(dx)) * .5)
+        for dx in range(-half * across, (half + 1) * across):
+            top = -3 * j - round((half - abs(_centre(dx, across))) * .5)
             for dy, tone in ((0, (255, 236, 150)), (1, (226, 164, 44))):
                 sprite[(dx, top + dy)] = ((255, 255, 255) if fresh else tone, "^")
     if level >= len(RANKS) - 1 and shown >= 1:
         apex = -3 * count - round(half * .5) - 4
-        for dx, dy in ((0, -2), (-1, -1), (0, -1), (1, -1), (-2, 0), (-1, 0), (0, 0), (1, 0), (2, 0),
-                       (-1, 1), (1, 1), (-2, 2), (2, 2)):
-            sprite[(dx, apex + dy)] = ((255, 248, 200), "*")
+        rows, left = (_STAR_FINE, -4) if across == 2 else (_STAR, -2)
+        for dy, row in enumerate(rows, -2):
+            for dx, mark in enumerate(row, left):
+                if mark == "#":
+                    sprite[(dx, apex + dy)] = ((255, 248, 200), "*")
     return sprite
 
 
@@ -1264,7 +1337,8 @@ def stamp_earth(pixels: list[list[tuple]], radius: int, x: int, y: int, under=No
             pixels[py][px] = color if alpha >= 1 else mix(pixels[py][px], color, alpha)
 
 
-# The wordmark's pixel face: two-pixel stems, six by seven.
+# The wordmark's pixel face: two-pixel stems, six by seven; and two across,
+# twelve by seven, with its corners and diagonals eased a half step.
 _FONT = {
     "L": ("##....", "##....", "##....", "##....", "##....", "##....", "######"),
     "U": ("##..##", "##..##", "##..##", "##..##", "##..##", "##..##", ".####."),
@@ -1274,26 +1348,44 @@ _FONT = {
     "D": ("#####.", "##..##", "##..##", "##..##", "##..##", "##..##", "#####."),
     "E": ("######", "##....", "##....", "#####.", "##....", "##....", "######"),
 }
+_FONT_FINE = {
+    "L": ("####........", "####........", "####........", "####........", "####........", "####........",
+          "############"),
+    "U": ("####....####", "####....####", "####....####", "####....####", "####....####", "####....####",
+          ".##########."),
+    "N": ("####....####", "######..####", "#######.####", "####.#######", "####..######", "####....####",
+          "####....####"),
+    "A": (".##########.", "####....####", "####....####", "############", "####....####", "####....####",
+          "####....####"),
+    "R": ("###########.", "####....####", "####....####", "###########.", "####..####..", "####...####.",
+          "####....####"),
+    "D": ("###########.", "####....####", "####....####", "####....####", "####....####", "####....####",
+          "###########."),
+    "E": ("############", "####........", "####........", "##########..", "####........", "####........",
+          "############"),
+}
 
 
-def wordmark(words: tuple[str, ...], size: int = 1) -> dict:
+def wordmark(words: tuple[str, ...], size: int = 1, across: int = 1) -> dict:
     """The title in cream-to-gold pixels, lit from the upper left, with a drop
-    shadow; at double size every other pixel row is a shade deeper, as on the banner."""
+    shadow; at double size every other pixel row is a shade deeper, as on the
+    banner. Its width is in pixels, `across` to a cell."""
     ink = set()
     line_gap = 2 * size
+    font = _FONT_FINE if across == 2 else _FONT
     for line, word in enumerate(words):
         top = line * (7 * size + line_gap)
         for index, letter in enumerate(word):
-            for gy, glyph_row in enumerate(_FONT[letter]):
+            for gy, glyph_row in enumerate(font[letter]):
                 for gx, mark in enumerate(glyph_row):
                     if mark == "#":
                         for sy in range(size):
                             for sx in range(size):
-                                ink.add((index * 7 * size + gx * size + sx, top + gy * size + sy))
+                                ink.add((index * 7 * size * across + gx * size + sx, top + gy * size + sy))
     height = len(words) * 7 * size + (len(words) - 1) * line_gap
     sprite = {}
     for x, y in ink:
-        for shadow in ((x + 1, y + 1), (x + size, y + size)):
+        for shadow in ((x + across, y + 1), (x + size * across, y + size)):
             if shadow not in ink:
                 sprite[shadow] = ((40, 26, 58), " ")
     for x, y in ink:
@@ -1307,7 +1399,7 @@ def wordmark(words: tuple[str, ...], size: int = 1) -> dict:
         if size > 1 and y % 2:
             color = scale(color, .9)
         sprite[(x, y)] = (color, "#")
-    return {"sprite": sprite, "width": max(x for x, _ in ink) + 1 + size, "height": height + size}
+    return {"sprite": sprite, "width": max(x for x, _ in ink) + 1 + size * across, "height": height + size}
 
 
 # ---------------------------------------------------------------------------
@@ -1590,25 +1682,26 @@ class Display:
                 sprites.append((above(lander_sprite(0, throttle, t, "large", across), y, pad_y), x, y))
                 gap = pad_y - (y + feet)
                 if burning and gap < 16:
-                    sprites.append((widen(dust(1 - gap / 16, t, pad_half(st)), across), x, pad_y - 1))
+                    sprites.append((dust(1 - gap / 16, t, pad_half(st), across=across), x, pad_y - 1))
             settle = _span(t, 4.2, 5.0)
             if 0 < settle < 1:
-                sprites.append((widen(dust(.6 * (1 - settle), t + 3, pad_half(st) + round(6 * settle)), across),
+                sprites.append((dust(.6 * (1 - settle), t + 3, pad_half(st) + round(6 * settle), across=across),
                                 pad_c, pad_y - 1))
             if t >= 4.2:
                 beacon_on = True
             # The wordmark resolves left to right behind a hot edge.
             size = 2 if cols >= 120 and rows >= 40 else 1
-            mark = wordmark(("LUNAR", "LANDER"), size)
+            mark = wordmark(("LUNAR", "LANDER"), size, across)
             mx, my = max(2, round(cols * .05)), max(2, round(h * .08))
-            reveal = _span(t, 1.6, 2.6) * (mark["width"] + 4)
+            reveal = _span(t, 1.6, 2.6) * (mark["width"] + 4 * across)
             if reveal > 0 and unicode:
                 shown = {}
                 for (px, py), value in mark["sprite"].items():
                     if px <= reveal:
-                        shown[(px, py)] = ((255, 255, 255), "#") if px >= reveal - 2 and reveal < mark["width"] + 4 \
+                        shown[(px, py)] = ((255, 255, 255), "#") if px >= reveal - 2 * across \
+                            and reveal < mark["width"] + 4 * across \
                             and value[1] == "#" else value
-                sprites.append((widen(shown, across), mx * across, my))
+                sprites.append((shown, mx * across, my))
             elif reveal > 0:
                 title = "L U N A R   L A N D E R"
                 texts.append(((my + 4) // 2, mx, _gradient(title[:round(len(title) * reveal / (mark["width"] + 4))],
@@ -1644,14 +1737,14 @@ class Display:
                 appear = round(_ease(t / .8) * 5) / 5
                 sprite = {point: (mix(pixels[cy + point[1]][cx + point[0]] if 0 <= cy + point[1] < h
                                       and 0 <= cx + point[0] < w else (0, 0, 0), color, appear), glyph)
-                          for point, (color, glyph) in widen(medal_sprite(kind_name, radius, shine), across).items()}
+                          for point, (color, glyph) in medal_sprite(kind_name, radius, shine, across).items()}
                 sprites.append((sprite, cx, cy))
                 glints = {"GOLD": 6, "SILVER": 3}.get(kind_name, 0)
                 for n in range(glints if t > 1.4 else 0):
                     if (self.frame + n * 3) % 9 < 4:
                         angle = 2 * math.pi * _hash(n, 1, 7)
                         reach = radius * (1.2 + .3 * _hash(n, 2, 7))
-                        sprites.append((widen(sparkle(light), across), cx + round(math.cos(angle) * reach * across),
+                        sprites.append((sparkle(light, across), cx + round(math.cos(angle) * reach * across),
                                         cy + round(math.sin(angle) * reach)))
                 spaced = "  ".join(f"{kind_name} MEDAL")
                 texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, light, base)))
@@ -1662,10 +1755,10 @@ class Display:
                 texts.append((rows - 4, max(1, (cols - len(verdict)) // 2), [(verdict, light if award.improved else rgb(9))]))
             else:
                 ladder = award.career
-                sprites.append((widen(fireworks(t, cols, h, ladder.level), across), 0, 0))
+                sprites.append((fireworks(t, cols, h, ladder.level, across), 0, 0))
                 shown = _span(t, 1.0, 1.0 + .15 * max(1, ladder.level))
                 if shown > 0:
-                    sprites.append((widen(insignia(ladder.level, max(6, cols // 11), shown), across), w // 2,
+                    sprites.append((insignia(ladder.level, max(6, cols // 11), shown, across), w // 2,
                                     round(h * .55)))
                 spaced = "  ".join("PROMOTED")
                 texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, (255, 244, 214), (232, 160, 58))))
@@ -1703,7 +1796,7 @@ class Display:
                 beacon_on = True
                 sprites.append((lander_sprite(0, 0, t, "large", across), pad_c, ground))
                 if t < 2.2:
-                    sprites.append((widen(dust(max(0.0, 1 - t / 1.6), t, pad_half(st) + round(t * 5)), across),
+                    sprites.append((dust(max(0.0, 1 - t / 1.6), t, pad_half(st) + round(t * 5), across=across),
                                     pad_c, pad_y - 1))
                 note = record_note or "SAFE LANDING"
                 plain_note = plain(note, cols - 4)
@@ -1712,7 +1805,7 @@ class Display:
                 if t < .15:
                     sprites.append((lander_sprite(flight.angle, 0, t, "large", across), pad_c,
                                     ground - 3 + round(t * 20)))
-                sprites.append((widen(explosion(max(0.0, t - .1), max(6, cols // 12)), across), pad_c, pad_y - 1))
+                sprites.append((explosion(max(0.0, t - .1), max(6, cols // 12), across=across), pad_c, pad_y - 1))
                 # A scorch on the ground, once the fire has passed.
                 if t > .8:
                     for x in range(pad_c - 7 * across, pad_c + 8 * across):
@@ -2038,14 +2131,14 @@ class Display:
                 if 0 <= x < px_w and 0 <= py < px_h:
                     pixels[py][x] = color
         # The lander stands on its feet: the sprite's foot row is the physics feet' row.
-        # A widened sprite's centre falls between its middle pixels: see `widen`.
+        # With narrow pixels a sprite's centre falls between its middle two: see `_centre`.
         sx = round((flight.x - left) / step - (across - 1) / 2)
         feet_row = row_of(flight.y - 3) - 1
         size = "medium" if width >= 120 and height >= 40 else "small"
         sy = max(6, min(px_h - 5, feet_row - LANDERS[size][1]))
         sprites = []
         if flight.status == "crashed":
-            sprites.append((widen(explosion(1.6, 4, 9), across), sx,
+            sprites.append((explosion(1.6, 4, 9, across), sx,
                             min(px_h - 1, row_of(ground.height(flight.x)) - 1)))
         else:
             power = flight.throttle if flight.fuel > 0 and flight.status == "flying" else 0
@@ -2055,7 +2148,7 @@ class Display:
             gap_m = altitude
             if power > 0 and gap_m < 40 and 0 <= sx < px_w:
                 strength = power * (1 - gap_m / 40)
-                sprites.append((widen(dust(strength, flight.elapsed, 6 + round(8 * strength)), across),
+                sprites.append((dust(strength, flight.elapsed, 6 + round(8 * strength), across=across),
                                 sx, ground_row[sx] - 1))
         if unicode:
             for sprite, x, y in sprites:
