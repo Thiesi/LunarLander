@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     display = ll.Display(ll.Host(args.width, args.height, args.color, not args.ascii, pixels=args.pixels))
+    display.tagline = ll.TAGLINES[0]  # captures stay reproducible
     flight = ll.training()
     flight.throttle = .7
     flight.angle = args.angle

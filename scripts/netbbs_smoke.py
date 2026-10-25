@@ -104,10 +104,10 @@ async def check(root, captures, width, height, scenario):
             limit = 3 if scenario == "deadline" else 30
             task = asyncio.create_task(run_door(caller, lane, door, player, wall_time_limit_seconds=limit))
             tasks.append(task)
-            # The splash's title is pixel art; its caption is the first text on screen.
+            # The splash's title is pixel art and its tagline varies; the pilot line follows it.
             await caller.drawing(task)
             if scenario not in ("deadline", "disconnect"):
-                await caller.until("PRECISION FLYING", task)
+                await caller.until("MISSIONS + DAILY", task)
             if scenario == "deadline":
                 result = await asyncio.wait_for(task, 6)
                 assert result.reason == "exited", result
@@ -156,7 +156,7 @@ async def check(root, captures, width, height, scenario):
                         tasks.append(other)
                         others.append((second, other))
                     # The splash holds until a key, as the other native doors' do.
-                    await asyncio.gather(*(session.until("PRECISION FLYING", child) for session, child in others))
+                    await asyncio.gather(*(session.until("MISSIONS + DAILY", child) for session, child in others))
                     for session, _ in others:
                         session.send(" ")
                     await asyncio.gather(*(session.until("FLIGHT DIRECTOR", child) for session, child in others))

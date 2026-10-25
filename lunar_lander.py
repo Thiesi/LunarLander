@@ -1565,6 +1565,22 @@ def medal_parts(kind: str | None, unicode: bool) -> list[tuple[str, tuple]]:
     return [("●" if unicode else kind[0], MEDAL_COLORS[kind][1])]
 
 
+# The splash's line under the wordmark, one picked for each session.
+TAGLINES = (
+    "GRAVITY IS PATIENT. FUEL IS NOT.",
+    "THE MOON FORGIVES NOTHING. LAND ANYWAY.",
+    "ONE PAD. ONE TANK. NO SECOND CHANCES.",
+    "THE EAGLE HAS NOT LANDED. YET.",
+    "BRAKE EARLY. LAND SOFTLY. BRAG LOUDLY.",
+    "THREE METRES PER SECOND OR BUST.",
+    "THE LAST HUNDRED METRES ARE THE HARD PART.",
+    "HOUSTON IS WATCHING. NO PRESSURE.",
+    "MAGNIFICENT DESOLATION AWAITS.",
+    "A SMALL STEP. A VERY CAREFUL DESCENT.",
+    "384,400 KM BEHIND YOU. TEN METRES TO GO.",
+    "FLY IT LIKE THE TANK IS HALF EMPTY.",
+)
+
 SCENE_SECONDS = {"splash": 5.0, "launch": 1.6, "landing": 2.6, "crash": 2.4, "medal": 3.2, "promotion": 4.4}
 SCENE_MAX = (132, 50)
 SPLASH_PROMPT = "press any key to begin"
@@ -1594,6 +1610,7 @@ class Display:
         self.camera: tuple[float, float] | None = None
         self.frame = 0
         self._landscape: tuple | None = None
+        self.tagline = random.choice(TAGLINES)
         # Pixels to a cell across: quadrant blocks show two, but need Unicode.
         self.across = 2 if host.unicode and host.pixels == "quad" else 1
 
@@ -1707,9 +1724,9 @@ class Display:
                 texts.append(((my + 4) // 2, mx, _gradient(title[:round(len(title) * reveal / (mark["width"] + 4))],
                                                              (255, 246, 222), (232, 160, 58))))
             text_row = (my + mark["height"]) // 2 + 2
-            subtitle = "A PRECISION FLYING GAME FOR NETBBS"
+            subtitle = self.tagline
             if len(subtitle) > cols - mx - 2:
-                subtitle = "PRECISION FLYING FOR NETBBS"
+                subtitle = min(TAGLINES, key=len)
             typed = round(len(subtitle) * _span(t, 2.6, 3.3))
             if typed:
                 texts.append((text_row, mx, [(subtitle[:typed], (150, 168, 228))]))
