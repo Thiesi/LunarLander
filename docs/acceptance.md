@@ -1,8 +1,27 @@
 # Release acceptance
 
-Target: `v0.2.0`. It is not a claim that every NetBBS transport or target
+Target: `v0.2.1`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
-are listed at the end. v0.1.0's evidence follows v0.2.0's.
+are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.2.1: CP437 callers and documentation
+
+- A SyncTERM (CP437) playtest on NetBBS showed v0.2.0's quadrant blocks as
+  question marks: NetBBS maps every other glyph the game draws to CP437, but has
+  no substitute for a quadrant. The door now reads the caller's character set
+  (`charset`, proposed in NetBBS #1557) and draws half blocks for CP437 and
+  ASCII glyphs for ASCII; without the field it behaves as v0.2.0. Twelve screens
+  run through NetBBS's own CP437 mapping (from its `main`) produced 7,010
+  question marks from quadrant output and none on the CP437 path.
+- 89 unittest cases pass in both pixel modes; added: the `charset` field's
+  parsing and that no view gives a CP437 caller a quadrant.
+- Hosted CI passed on the change and on the release commit. Locally, the
+  3-second deadline test timed out on `main` and on the change alike while the
+  development machine was saturated by unrelated processes.
+- The README now follows the other native games' layout, and the operations
+  guide describes the door bundled in NetBBS v7.41.0 (Gallery registration,
+  records backed up with the node) and the `datetime_format` it does not read
+  yet (#34).
 
 ## v0.2.0: quadrant blocks, fine sprite art, taglines and fuel alerts
 
@@ -84,6 +103,8 @@ before release and remain open:
 
 - v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
   pieces join without seams. NetBBS's web terminal draws them itself.
+- v0.2.1 CP437 callers: half blocks once NetBBS sends `charset` (NetBBS #1557).
+  Until then, CP437 callers need `DOOR_LL_PIXELS=half` on their node.
 
 - Human flight/control/balance assessment of the four added authored missions and animations.
 - rc.4 career: human assessment of the eight new missions and of the medal

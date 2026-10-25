@@ -26,7 +26,7 @@ import time
 import unicodedata
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DT = 1 / 60
 GRAVITY = 1.62
 DRY_MASS = 900.0
