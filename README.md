@@ -127,6 +127,13 @@ Releases are tagged by hand once CI passes on the release commit.
 `lunar_lander.py`, `netbbs.json`, `LICENSE`, `OPERATIONS.md` and `ACCEPTANCE.md`
 with a `SHA256SUMS` file for the GitHub release. NetBBS vendors these releases.
 
+Every release's notes carry a **NetBBS** line saying whether the saved data
+changed, so a SysOp knows whether it can run ahead of the copy NetBBS bundles:
+"saved data unchanged; runs on NetBBS 7.41.0 or later", or "changes the save
+format; wait for the NetBBS release that bundles it". The format NetBBS's
+backups check is the records database: application ID `0x4C4C0001`, schema
+(`user_version`) 1, tables `pilots` and `scores`.
+
 The banner is concept art rather than a game screen, and doubles as the
 repository's social preview; the [artwork notes](assets/README.md) explain how
 it was made and set.

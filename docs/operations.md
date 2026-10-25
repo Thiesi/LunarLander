@@ -62,7 +62,12 @@ the node's backups include them. NetBBS updates the bundled copy with its own
 releases, which may trail this repository's.
 
 To run a release newer than the bundled copy, or on an older NetBBS, register it
-by hand:
+by hand. NetBBS's door guide covers this in
+[Running a newer game release](https://github.com/Thiesi/NetBBS/blob/main/docs/NetBBS-door-guide.md#running-a-newer-game-release).
+First read the release's **NetBBS** line in its notes: run it ahead of the bundled
+copy only when it says the saved data is unchanged, since NetBBS's backups check
+the records database (application ID `0x4C4C0001`, schema 1, tables `pilots` and
+`scores`). If it says the format changed, wait for the NetBBS release that bundles it.
 
 1. Download `lunar_lander.py`, `netbbs.json`, `LICENSE` and `SHA256SUMS` from the
    same tagged release. Verify the checksums before installation. Candidate
@@ -73,6 +78,13 @@ by hand:
    `executable_path`, `profile.install_dir` and `DOOR_LL_DATA_DIR` with absolute
    paths on that host. The shipped POSIX paths are examples for a NetBSD or Linux
    service installation; adjust them to your interpreter and game directory.
+   Point `DOOR_LL_DATA_DIR` at the node's own records, `<database>.doors/lunar_lander`
+   (the example assumes the database `/srv/bbs/netbbs.db`): the hand-installed
+   release then flies on the bundled copy's records, node backups include them,
+   and returning to the bundled copy later moves nothing. A copy NetBBS did not
+   install plays every guest under the shared guest account, so keep its minimum
+   play level above your guest level, and raise the bundled entry to SysOp so
+   callers see one copy.
 4. Give the BBS service account read access to the script and write access to the
    chosen data directory. Keep the entry SysOp-only until Test as SysOp and real
    caller transport checks pass. LL never posts to boards or chat. To have a chat
