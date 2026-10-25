@@ -54,9 +54,9 @@ class PrecedenceTests(unittest.TestCase):
         clock = ll.DailyClock("UTC", ll.date_part("%d.%m.%Y %H:%M"))
         self.assertEqual(clock.warning, "")
         daily = next(m for m in ll.missions("2026-10-25", clock.date_format) if m.key.startswith("daily-"))
-        self.assertEqual(daily.name, "DAILY 25.10.2026")
+        self.assertEqual(daily.name, "MARIA 25.10.2026")
         # The seed and record key keep the ISO date whatever the display.
-        self.assertEqual(daily.key, "daily-2026-10-25")
+        self.assertEqual(daily.key, "daily-2026-10-25-maria")
 
 
 if __name__ == "__main__":

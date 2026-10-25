@@ -29,19 +29,21 @@ class DailyTests(unittest.TestCase):
         self.assertFalse(clock.warning)
         game = ll.Game(clock=clock)
         game.key("left")  # the chapter tabs wrap round to DAILY
-        self.assertEqual(game.mission.name, "DAILY 24.10.2026")
+        self.assertEqual(game.mission.name, "MARIA 24.10.2026")
+        game.key("down")  # the same place on the tab survives midnight
+        self.assertEqual(game.mission.name, "HIGHLANDS 24.10.2026")
         game.key("enter")
         now[0] = datetime(2026, 10, 24, 22, 1, tzinfo=timezone.utc)
         game.tick(.1, True)
-        self.assertEqual(game.mission.key, "daily-2026-10-24")
+        self.assertEqual(game.mission.key, "daily-2026-10-24-highlands")
         game.mode = "debrief"
         game.key("r")
-        self.assertEqual(game.mission.key, "daily-2026-10-25")
-        self.assertEqual(game.mission.name, "DAILY 25.10.2026")
+        self.assertEqual(game.mission.key, "daily-2026-10-25-highlands")
+        self.assertEqual(game.mission.name, "HIGHLANDS 25.10.2026")
         game.mode = "menu"
         now[0] = datetime(2026, 10, 26, 23, 1, tzinfo=timezone.utc)
         game.tick(.1, True)
-        self.assertEqual(game.mission.key, "daily-2026-10-27")
+        self.assertEqual(game.mission.key, "daily-2026-10-27-highlands")
 
     def test_day_changes_the_actual_flight_not_just_the_label(self):
         a, b = ll.missions("2026-10-24")[4].launch(), ll.missions("2026-10-25")[4].launch()

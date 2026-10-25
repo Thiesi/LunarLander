@@ -32,7 +32,11 @@ Missions are grouped in chapters, all open from the start:
   Apennine Front. Rough terrain and narrower pads.
 - **Frontier**: Far Side, Polar Approach, Tsiolkovsky, Shackleton Rim and Aitken
   Basin. Fast entries, strong drift and lean tanks; difficulty up to five.
-- **Daily**: the day's challenge.
+- **Daily**: the day's three challenges, one in the manner of each chapter.
+  Every setting of a daily (pad width, start, drift, fuel, sink and terrain) is
+  drawn from the span of its chapter's own missions, so the Maria daily is as
+  gentle as the Maria missions, the Frontier daily as lean as the Frontier ones. The harder
+  half of a chapter's span scores its higher difficulty.
 
 Every safe landing on a ranked mission earns a medal from the pilot's best score
 there, per point of the mission's difficulty: bronze for any safe landing, silver
@@ -40,12 +44,12 @@ from 1,400 and gold from 1,750. Medals count toward a career rank (gold 3 points
 silver 2, bronze 1): Cadet, Pilot (3), Flight Officer (8), LM Pilot (15),
 Commander (23), Mission Commander (32) and Lunar Ace (45, every mission gold).
 Medals and ranks are read from the existing best scores, so pilots from earlier
-releases keep what they earned and no migration is needed. The daily challenge
-shows today's medal but does not count toward rank. Callers without a NetBBS
+releases keep what they earned and no migration is needed. The dailies show
+today's medals but do not count toward rank. Callers without a NetBBS
 identity earn medals for the session only.
-The daily challenge changes at midnight in the node's published IANA timezone,
-including daylight-saving transitions. Everyone gets the same flight for a given
-calendar date; terrain and starting conditions change between dates. An active
+The dailies change at midnight in the node's published IANA timezone,
+including daylight-saving transitions. Everyone gets the same three flights for
+a given calendar date, on every node; each has its own leaderboard for the day. An active
 flight keeps its original date and leaderboard, even past midnight. Returning to
 the briefing or retrying picks up the new day. Only completed safe landings rank. Training,
 aborted flights and crashes never replace a record. The formula is in the manual:
@@ -148,7 +152,7 @@ an invalid zone or unavailable system timezone database produces a visible warni
 and a bounded stderr diagnostic before falling back to UTC. Install the operating
 system's timezone data to use named zones. The briefing shows the reset timezone.
 
-The daily challenge shows its date the way the rest of the node does. Since
+The dailies show their date the way the rest of the node does. Since
 v7.41.0, NetBBS publishes the node's date-and-time format (**Settings ▸ Timestamp
 format**) to doors as `datetime_format`
 ([NetBBS #1545](https://github.com/Thiesi/NetBBS/issues/1545)); LL takes its date

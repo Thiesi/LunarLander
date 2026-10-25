@@ -49,8 +49,9 @@ No emoji, font-dependent icons, blinking text or color-only warnings.
   undersize terminals, help and explicit pause; deadline still advances. Never
   write the bottom-right cell. Resize invalidates the diff buffer.
 - **Content:** training basin plus seven authored challenges, increasing lateral
-  drift, terrain and fuel pressure. A seeded daily challenge gives callers the
-  same start for a node-local calendar day. No randomness in collision or scoring.
+  drift, terrain and fuel pressure. Three seeded daily challenges, one drawn
+  from each chapter's span of settings, give callers the same starts for a
+  node-local calendar day. No randomness in collision or scoring.
 - **Scoring:** completed safe landings only; difficulty, fuel reserve and landing
   precision. Training is unranked. One best score per node/account/challenge;
   exact score formula and tie-break appear in help. No resume of an active flight
