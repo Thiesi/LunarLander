@@ -1,8 +1,25 @@
 # Release acceptance
 
-Target: `v0.7.1`. It is not a claim that every NetBBS transport or target
+Target: `v0.7.2`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.7.2: time to read
+
+- Playtest feedback: the launch scene runs 4.5 s, not 3 (#88); a medal, a
+  promotion and a crash hold, once played out, until a key, ignoring keys in
+  their first 1.2 s so a burn held through touchdown cannot skip them unseen
+  (#88, #89); the crash scene's hint reads "Continue".
+- New achievements on the debrief take turns every 4 s, named in their medal's
+  color with what each was for under it, in place of "+N more"; the Pilot
+  Record shows an earned one's date and what it was for side by side where
+  there is room, taking turns at 80 columns (#90).
+- 248 tests (unittest). The NetBBS smoke test now continues past the held
+  crash scene. Hosted CI with the real NetBBS 7.40.0 runtime on Linux and
+  Windows passed on the release commit. Saved data is unchanged from v0.6.0
+  (schema 3); no new settings.
+- Field check: at 80x24, the achievement column's turns read calmly, and 4 s
+  is long enough to read a description.
 
 ## v0.7.1: a sample return's records
 
