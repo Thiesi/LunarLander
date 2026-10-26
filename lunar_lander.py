@@ -1854,6 +1854,43 @@ def fuel_alert(flight: Flight) -> int:
     return 2 if left <= FUEL_CRITICAL_SECONDS else 1 if left <= FUEL_LOW_SECONDS else 0
 
 
+# The radio: short calls in the manner of Apollo's capsule communicator. In
+# flight they count the fuel down and, low over the ground, read out height,
+# sink and drift; the debrief quotes the word on how it ended.
+FUEL_CALLS = {1: f"{FUEL_LOW_SECONDS} seconds.", 2: f"{FUEL_CRITICAL_SECONDS} seconds.",
+              3: "Fuel's out. Coast it in."}
+LANDED_CALLS = ("Contact light. Engine stop.", "Roger, we copy you on the ground.",
+                "Copy, you're down. Nice and easy.")
+CRASH_CALLS = ("Houston, we've had a problem.", "We've lost the signal. Say again?")
+RADIO_LOW, RADIO_EVERY = 60, 4.0
+
+
+def altitude_call(altitude: float, flight: Flight) -> str:
+    """The height, sink and drift, read out the way a crew calls them."""
+    way = "down" if flight.vy <= 0 else "up"
+    drift = (", drifting right" if flight.vx > .5 else ", drifting left" if flight.vx < -.5 else "")
+    return f"{altitude:.0f} metres, {way} {abs(flight.vy):.1f}{drift}."
+
+
+def debrief_call(flight: Flight, mission: Mission, award=None) -> str:
+    """The radio's word on a finished flight. A first gold on a mission names
+    its base; a landing on fumes earns relief; the rest vary by the flight."""
+    pick = round(flight.elapsed * 10)
+    if flight.status == "landed":
+        if award is not None and award.mission.key == mission.key and award.medal == "GOLD" and award.improved:
+            # A daily's name carries its date: the base is named for its manner alone.
+            base = (mission.name.split(" ", 1)[0] if any(ch.isdigit() for ch in mission.name)
+                    else mission.name).title() + " Base"
+            call = f"Houston, {base} here. The Eagle has landed."
+            return call if len(call) <= 56 else f"{base} here. The Eagle has landed."
+        if flight.fuel < .1 * flight.initial_fuel:
+            return "A bunch of guys about to turn blue. We're breathing again."
+        return LANDED_CALLS[pick % len(LANDED_CALLS)]
+    if flight.fuel <= 0:
+        return "Fuel exhausted. We've lost the signal."
+    return CRASH_CALLS[pick % len(CRASH_CALLS)]
+
+
 def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
                  size: str = "small", across: int = 1) -> dict[tuple[int, int], str]:
     """Hull, legs and plume as roles, rotated together in square-pixel space.
@@ -2491,6 +2528,9 @@ class Display:
         self.tagline = random.choice(TAGLINES)
         # The fuel alert shown last, and the frame it began: a new alert flashes.
         self._alert = (0, 0)
+        # The radio: its flight, call, until when it shows (flight time), the
+        # fuel alert it last called and when it last read out the altitude.
+        self._radio = [None, "", 0.0, 0, -RADIO_EVERY]
         # Pixels to a cell across: quadrant blocks show two, but need Unicode
         # all the way to the terminal and a font that has them. CP437 has half
         # blocks and no quadrants; NetBBS says when a caller's font has none.
@@ -2806,8 +2846,12 @@ class Display:
         elif mode == "debrief":
             landed = flight.status == "landed"
             accent = 6 if landed else 8
+            # The radio's word: a landing's in place of its reason (it only says
+            # contact light), a crash's under the reason it ended.
+            call = debrief_call(flight, mission, self.deck.award)
+            call = f'CAPCOM: "{call}"' if len(call) <= 50 else f'"{call}"'
             lines = ["CONTACT LIGHT / LANDED" if landed else "SIGNAL LOST / LANDER DOWN",
-                     "", flight.reason, "",
+                     "", *((call,) if landed else (flight.reason, call)), "",
                      f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
                      f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", ""]
             award = self.deck.award
@@ -3283,6 +3327,7 @@ class Display:
         if view_y <= pad_label_row < view_y + view_h:
             c.text(max(0, (pad_left + pad_right) // (2 * across) - 1), pad_label_row, "PAD", 6, None)
         alarm = self.fuel_warning(c, flight, view_y + 1)
+        self.radio(c, flight, altitude, view_y + 2)
         self.instruments(c, flight, mission, altitude, span, remaining, slow, alarm)
         return span
 
@@ -3305,6 +3350,26 @@ class Display:
             color = (255, 186, 60) if level == 1 else rgb(8)
             c.text(max(0, (c.width - len(text) - 4) // 2), row, f"  {text}  ", (16, 12, 22), color)
         return level >= 2 and lit
+
+    def radio(self, c: Canvas, flight: Flight, altitude: float, row: int):
+        """A radio call under the fuel chip: the fuel counting down as each alert
+        begins, and low over the ground, height, sink and drift every few seconds."""
+        state = self._radio
+        if state[0] is not flight:
+            self._radio = state = [flight, "", 0.0, 0, -RADIO_EVERY]
+        if flight.status != "flying":
+            return
+        level = fuel_alert(flight)
+        if level != state[3]:
+            state[3] = level
+            if level in FUEL_CALLS:
+                state[1], state[2] = FUEL_CALLS[level], flight.elapsed + 3
+        elif (altitude < RADIO_LOW and flight.elapsed >= state[2]
+              and flight.elapsed - state[4] >= RADIO_EVERY):
+            state[1], state[2], state[4] = altitude_call(altitude, flight), flight.elapsed + 2.5, flight.elapsed
+        if state[1] and flight.elapsed < state[2]:
+            text = f'"{state[1]}"'
+            c.text(max(0, (c.width - len(text) - 2) // 2), row, f" {text} ", (200, 222, 255), (18, 24, 44))
 
     def instruments(self, c: Canvas, flight: Flight, mission: Mission, altitude: float, span: float,
                     remaining, slow, alarm: bool = False):
