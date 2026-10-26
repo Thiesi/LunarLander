@@ -144,6 +144,7 @@ These settings go in the door profile's environment:
 | `DOOR_SPLASH=0` or `DOOR_LL_SPLASH=0` | Skip the title splash. `DOOR_SPLASH` is shared with the other native doors. |
 | `DOOR_LL_SCENES=0` | Skip the ignition, touchdown and crash scenes. |
 | `DOOR_LL_LIVE=0` | Don't share or show who is flying right now (the `live` folder beside `pilots.db`). |
+| `DOOR_LL_TODAY` | A testing and preview aid, not for production: pins the game's date (`YYYY-MM-DD`), so the dailies, weekend specials and their countdown follow it, and dailies flown then are filed under that date. Anything else is ignored. |
 | `DOOR_LL_DATE_FORMAT` | How the daily challenges show their date, for example `%d/%m/%Y`. Without it, the date follows the node's own format (NetBBS 7.41.0 or later), or ISO `%Y-%m-%d`. |
 
 ## Classic BBS setup

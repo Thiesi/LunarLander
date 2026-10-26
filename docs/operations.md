@@ -221,6 +221,14 @@ characters). Month/day names follow the process locale. An invalid setting
 visibly falls back to ISO dates. Date formatting never changes the challenge seed
 or stored record keys.
 
+`DOOR_LL_TODAY=YYYY-MM-DD` pins the game's date, as a testing and preview aid
+(screen galleries, trying a weekend special on a weekday). It is not for
+production: every pilot on the node flies that day's dailies, weekend
+specials and countdown for as long as it is set, and a daily flown then is
+filed under the pinned date (its bests, board, ghost and streaks), though
+records keep their real timestamps. A value that is not a real `YYYY-MM-DD` date is
+ignored and the clock is used.
+
 NetBBS forwards size changes via republished JSON and SIGUSR1. LL also
 polls metadata to coalesce notifications.
 Resizing below 80x24 pauses the simulation wherever the host publishes the change.

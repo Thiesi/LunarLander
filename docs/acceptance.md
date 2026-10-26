@@ -13,7 +13,9 @@ are listed at the end. Earlier releases' evidence follows, newest first.
   speed, and no closest record for a sample return); a successful return
   could earn crash achievements such as Dead Stick; and a crash after lifting
   off was judged by the earlier soft touchdown, not the impact.
-- 244 tests (unittest); each new test fails on v0.7.0. Hosted CI with the
+- `DOOR_LL_TODAY=YYYY-MM-DD` pins the game's date for testing and previews
+  (asked for by NetBBS for its screen gallery); invalid values are ignored.
+- 245 tests (unittest); each new bug test fails on v0.7.0. Hosted CI with the
   real NetBBS 7.40.0 runtime on Linux and Windows passed on the release
   commit. Saved data is unchanged from v0.6.0 (schema 3).
 
