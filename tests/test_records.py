@@ -14,12 +14,23 @@ import lunar_lander as ll
 def land(mission):
     """A 10 Hz pilot using the same angle/throttle increments as human controls."""
     flight = mission.launch()
-    for frame in range(1800):
-        altitude = flight.y - flight.terrain.pad.height - 3
+    for frame in range(3000):
+        pad = flight.terrain.pad
+        target = (pad.left + pad.right) / 2 if mission.hop else mission.center
+        ridge = 0.0
+        altitude = flight.y - pad.height - 3
         desired_vy = -min(8, max(.8, altitude * .10))
-        desired_vx = max(-8, min(8, (mission.center - flight.x) * .08))
+        if mission.hop and abs(target - flight.x) > 30:
+            # A hop's next leg: cruise above the ground between, then descend.
+            low, high = sorted((flight.x, target))
+            ridge = max(flight.terrain.height(x) for x in range(int(low), int(high) + 1, 5))
+            desired_vy = max(-4, min(5, (ridge + 35 - (flight.y - 3)) * .4))
+        reach = 8 if not mission.hop or flight.y - 3 > ridge + 20 or abs(target - flight.x) <= 30 else 1
+        desired_vx = max(-reach, min(reach, (target - flight.x) * .08))
         ax = (desired_vx - flight.vx) * .8
         ay = ll.GRAVITY + (desired_vy - flight.vy) * 1.2
+        if mission.hop:
+            ay = max(0.0, ay)  # to sink faster, ease off; never thrust downward
         angle = max(-60, min(60, round(math.degrees(math.atan2(ax, max(.1, ay))) / 10) * 10))
         flight.angle = angle
         throttle = math.hypot(ax, ay) * (ll.DRY_MASS + flight.fuel) / ll.MAX_THRUST

@@ -552,8 +552,18 @@ class Flight:
     gravity: float = GRAVITY
     # (altitude, fuel) every TRACE_EVERY seconds, for the debrief's descent trace.
     trace: list = field(default_factory=list, repr=False, compare=False)
+    # A hop's pads still to come after the lit one, the (vy, vx) of each
+    # touchdown made on the way, and whether the craft stands on a pad between.
+    pads: tuple = ()
+    touchdowns: list = field(default_factory=list, repr=False, compare=False)
+    resting: bool = False
+    # After lift-off, the pad's height until the feet are 2 m clear of it:
+    # upright until then, and a soft touch back down stands it on the pad again.
+    liftoff: float | None = None
 
     def command(self, key: str):
+        if key in ("a", "left", "d", "right") and (self.resting or self.liftoff is not None):
+            return  # on a pad, or just off it: upright until clear
         if key in ("a", "left"):
             self.angle = max(-60.0, self.angle - 10)
         elif key in ("d", "right"):
@@ -581,6 +591,11 @@ class Flight:
         if all(y > self.terrain.height(x) for x, y in samples):
             return False
         pad = self.terrain.pad
+        if self.liftoff is not None and abs(self.vy) <= 3:
+            # Settled back onto the pad it just left: standing there again.
+            self.y, self.vx, self.vy, self.angle = self.liftoff + 3.01, 0.0, 0.0, 0.0
+            self.resting, self.liftoff = True, None
+            return True
         if not all(pad.left <= x <= pad.right for x, _ in feet):
             reason = "Terrain strike: put both landing feet inside the lit pad."
         elif abs(self.angle) > 10:
@@ -589,6 +604,14 @@ class Flight:
             reason = "Sideways drift: reduce horizontal speed to 2 m/s or less."
         elif abs(self.vy) > 3:
             reason = "Hard impact: reduce vertical speed to 3 m/s or less."
+        elif self.pads:
+            # A hop: down on this pad, the next one lit. The craft stands upright
+            # on its feet until the engine lifts it.
+            self.touchdowns.append((self.vy, self.vx))
+            self.terrain, self.pads = replace(self.terrain, pad=self.pads[0]), self.pads[1:]
+            self.x, self.y, self.vx, self.vy, self.angle = (self.x, pad.height + 3.01, 0.0, 0.0, 0.0)
+            self.resting = True
+            return True
         else:
             self.status = "landed"
             self.reason = "Contact light. Engine stop. Welcome to the Moon."
@@ -599,7 +622,9 @@ class Flight:
     def step(self, dt: float = DT):
         if not 0 < dt <= 0.1:
             raise ValueError("flight steps must be in (0, 0.1] seconds")
-        if self.status != "flying" or self.contact():
+        if self.resting or self.liftoff is not None:
+            self.angle = 0.0  # on a pad, or just off it: upright until clear
+        if self.status != "flying" or (not self.resting and self.contact()):
             return
         if self.elapsed >= len(self.trace) * TRACE_EVERY:
             self.trace.append((max(0.0, self.y - self.terrain.height(self.x) - 3), self.fuel))
@@ -610,6 +635,19 @@ class Flight:
             burn = min(self.fuel, FUEL_FLOW * self.throttle * h)
             power = burn / (FUEL_FLOW * h)
             acceleration = MAX_THRUST * power / (DRY_MASS + self.fuel - burn / 2)
+            if self.resting:
+                self.angle = 0.0
+                if acceleration <= self.gravity:
+                    # Not yet enough thrust to lift off: the engine burns, the craft stands.
+                    self.fuel -= burn
+                    self.elapsed += h
+                    continue
+                self.resting, self.liftoff = False, self.y - 3.01
+            if self.liftoff is not None:
+                if self.y - 3 - self.liftoff < 2:
+                    self.angle = 0.0
+                else:
+                    self.liftoff = None
             a = math.radians(self.angle)
             ax, ay = acceleration * math.sin(a), acceleration * math.cos(a) - self.gravity
             self.x += self.vx * h + ax * h * h / 2
@@ -627,7 +665,9 @@ class Flight:
     def score(self, difficulty: int = 1) -> int:
         if self.status != "landed":
             return 0
-        precision = max(0, 1 - abs(self.vy) / 3) + max(0, 1 - abs(self.vx) / 2)
+        # A hop scores its worst touchdown.
+        precision = min(max(0, 1 - abs(vy) / 3) + max(0, 1 - abs(vx) / 2)
+                        for vy, vx in (*self.touchdowns, (self.vy, self.vx)))
         return round(difficulty * (1000 + 500 * self.fuel / self.initial_fuel + 250 * precision))
 
 
@@ -653,18 +693,23 @@ class Mission:
     sink: float = -6.0
     relief: tuple[int, int] = (45, 115)
     gravity: float = GRAVITY
+    # A hop: the second pad's centre, this far from the first (0: no hop).
+    hop: float = 0.0
 
     def launch(self) -> Flight:
         if self.difficulty == 0:
             return training()
         rng = random.Random(self.seed)
         pad = Pad(self.center - self.width / 2, self.center + self.width / 2, 35, self.name)
+        pads = (pad, Pad(pad.left + self.hop, pad.right + self.hop, 35, self.name)) if self.hop else (pad,)
         points = [(float(x), float(rng.randint(*self.relief))) for x in range(0, 1001, 80)
-                  if x < pad.left - 30 or x > pad.right + 30]
-        points.extend(((pad.left, pad.height), (pad.right, pad.height), (1000.0, 80.0)))
+                  if all(x < p.left - 30 or x > p.right + 30 for p in pads)]
+        for p in pads:
+            points.extend(((p.left, p.height), (p.right, p.height)))
+        points.append((1000.0, 80.0))
         return Flight(Terrain(tuple(sorted(points)), pad), x=self.center + self.offset,
                       y=self.altitude, vx=self.drift, vy=self.sink, fuel=self.fuel, initial_fuel=self.fuel,
-                      gravity=self.gravity)
+                      gravity=self.gravity, pads=pads[1:])
 
 
 # The day's three challenges, one in the manner of each chapter. Every setting
@@ -710,15 +755,40 @@ def generated_mission(key: str, name: str, briefing: str, spans: tuple, rng: ran
                    altitude, offset, -side * drift, fuel, seed, sink, relief)
 
 
+# Hops: land on the first pad, lift off and land on the second, this far along
+# (m), with this much more fuel (kg) for the second leg, over ground no higher
+# than HOP_CEILING. The Frontier daily is a hop at weekends.
+HOP_DISTANCE, HOP_FUEL, HOP_CEILING = (220, 320), 40, 110
+HOP_BRIEFING = "Weekend hop: land on the first pad, lift off, then land on the second."
+
+
+def hopped(mission: Mission, rng: random.Random) -> Mission:
+    """The mission as a hop: a second pad onward, in the direction it drifts
+    (or back, if onward leaves no room), more fuel, and lower ground between."""
+    distance = rng.randint(*HOP_DISTANCE)
+    room = {1: 900 - mission.width / 2 - mission.center, -1: mission.center - 100 - mission.width / 2}
+    way = 1 if mission.drift > 0 else -1
+    if room[way] < distance:
+        way = max(room, key=room.get)
+    hop = way * min(distance, math.floor(room[way]))
+    floor, ceiling = mission.relief
+    return replace(mission, description=HOP_BRIEFING, hop=float(round(hop)), fuel=mission.fuel + HOP_FUEL,
+                   relief=(min(floor, HOP_CEILING - 30), min(ceiling, HOP_CEILING)))
+
+
 def daily_missions(day: str, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
     """The day's three dailies. A pure function of the date: every node and
     every pilot flies the same three on the same day."""
     stamp = date.fromisoformat(day).strftime(date_format)
+    weekend = date.fromisoformat(day).weekday() >= 5
     dailies = []
     for n, (key, name, briefing, *spans) in enumerate(DAILY_TIERS):
         rng = random.Random(f"lunar-lander/daily/{day}/{key}")
-        dailies.append(generated_mission(f"daily-{day}-{key}", f"{name} {stamp}", briefing, tuple(spans), rng,
-                                         rng.random(), int(day.replace("-", "")) * 10 + n))
+        mission = generated_mission(f"daily-{day}-{key}", f"{name} {stamp}", briefing, tuple(spans), rng,
+                                    rng.random(), int(day.replace("-", "")) * 10 + n)
+        if weekend and key == "frontier":
+            mission = hopped(mission, random.Random(f"lunar-lander/daily/{day}/{key}/hop"))
+        dailies.append(mission)
     return tuple(dailies)
 
 
@@ -930,6 +1000,9 @@ _CATALOGUE = (
         ("streak-7", "Week on the Moon", "SILVER", "Land a daily seven days running"),
         ("streak-30", "Moonstruck", "GOLD", "Land a daily thirty days running"),
         ("daily-gold", "Frontier Gold", "SILVER", "Gold on a Frontier daily"))),
+    ("HOPS", (
+        ("hop", "Grasshopper", "BRONZE", "Land both pads of a hop"),
+        ("hop-gold", "Kangaroo", "SILVER", "Earn gold on a hop"))),
     ("PROGRAMS", (
         ("program-cadet", "Graduate", "BRONZE", "Complete a Cadet program"),
         ("program-astronaut", "Astronaut", "SILVER", "Complete an Astronaut program"),
@@ -998,6 +1071,10 @@ def flight_feats(mission: Mission, flight: Flight) -> set[str]:
                 got.add(key)
         if {"feather", "no-drift", "dead-centre"} <= got:
             got.add("perfect")
+        if flight.touchdowns:
+            got.add("hop")
+            if medal(mission, flight.score(mission.difficulty)) == "GOLD":
+                got.add("hop-gold")
         return got
     if flight.reason.startswith("Flight corridor"):
         return {"off-the-map"}  # never touched the ground: no impact to judge
@@ -2561,8 +2638,9 @@ class Display:
         # The fuel alert shown last, and the frame it began: a new alert flashes.
         self._alert = (0, 0)
         # The radio: its flight, call, until when it shows (flight time), the
-        # fuel alert it last called and when it last read out the altitude.
-        self._radio = [None, "", 0.0, 0, -RADIO_EVERY]
+        # fuel alert it last called, when it last read out the altitude and how
+        # many of a hop's pads it has called.
+        self._radio = [None, "", 0.0, 0, -RADIO_EVERY, 0]
         # Pixels to a cell across: quadrant blocks show two, but need Unicode
         # all the way to the terminal and a font that has them. CP437 has half
         # blocks and no quadrants; NetBBS says when a caller's font has none.
@@ -3365,6 +3443,11 @@ class Display:
         pad_label_row = view_y + (pad_row + 2) // 2
         if view_y <= pad_label_row < view_y + view_h:
             c.text(max(0, (pad_left + pad_right) // (2 * across) - 1), pad_label_row, "PAD", 6, None)
+        for n, ahead in enumerate(flight.pads, 2):
+            # A hop's pads to come: named by their order, not yet lit.
+            middle = round(((ahead.left + ahead.right) / 2 - left) / (metres / across))
+            if 0 <= middle < px_w and view_y <= pad_label_row < view_y + view_h:
+                c.text(max(0, middle // across - 2), pad_label_row, f"PAD {n}", 9, None)
         alarm = self.fuel_warning(c, flight, view_y + 1)
         self.radio(c, flight, altitude, view_y + 2)
         self.instruments(c, flight, mission, altitude, span, remaining, slow, alarm)
@@ -3395,15 +3478,19 @@ class Display:
         begins, and low over the ground, height, sink and drift every few seconds."""
         state = self._radio
         if state[0] is not flight:
-            self._radio = state = [flight, "", 0.0, 0, -RADIO_EVERY]
+            self._radio = state = [flight, "", 0.0, 0, -RADIO_EVERY, 0]
         if flight.status != "flying":
             return
+        if len(flight.touchdowns) > state[5]:
+            state[5] = len(flight.touchdowns)
+            state[1], state[2] = "Contact. Lift off for the next pad when ready.", flight.elapsed + 4
+            state[3] = fuel_alert(flight)  # the hop's own call, not a stale fuel one
         level = fuel_alert(flight)
         if level != state[3]:
             state[3] = level
             if level in FUEL_CALLS:
                 state[1], state[2] = FUEL_CALLS[level], flight.elapsed + 3
-        elif (altitude < RADIO_LOW and flight.elapsed >= state[2]
+        elif (altitude < RADIO_LOW and flight.elapsed >= state[2] and not flight.resting
               and flight.elapsed - state[4] >= RADIO_EVERY):
             state[1], state[2], state[4] = altitude_call(altitude, flight), flight.elapsed + 2.5, flight.elapsed
         if state[1] and flight.elapsed < state[2]:

@@ -5,7 +5,7 @@
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, three daily challenges, medals for every
-safe landing, 50 achievements, a career from Cadet to Lunar Ace, and Programs:
+safe landing, 52 achievements, a career from Cadet to Lunar Ace, and Programs:
 practise in the simulator, then fly each mission for real exactly once. Read the
 drift. Watch the fuel. Make both feet count.
 
@@ -34,7 +34,8 @@ itself.
 - **Missions:** a training basin and fifteen ranked missions in three chapters
   (Maria, Highlands, Frontier), plus three daily challenges, new at the node's
   local midnight: one in the manner of each chapter, from a broad sea to a lean
-  frontier run.
+  frontier run. At weekends the Frontier daily is a **hop**: land on one pad,
+  lift off, and land on a second one further along.
 - **Medals and ranks:** gold, silver and bronze for every safe landing, and a
   career from Cadet to Lunar Ace, with a medal ceremony and promotion fireworks.
 - **Programs:** a season's five to eight missions, the same for every pilot on
@@ -44,8 +45,8 @@ itself.
   loses that mission), **Astronaut** (one run per mission; a crash ends the
   program) or **Test Pilot** (no simulator; a crash ends it). Each preset has
   its own board, and leaving or losing the connection mid-flight counts as a crash.
-- **Achievements:** 50 of them, from milestones and precision touchdowns to
-  close calls, career feats, Programs and ten hidden ones. The **Pilot
+- **Achievements:** 52 of them, from milestones and precision touchdowns to
+  close calls, hops, career feats, Programs and ten hidden ones. The **Pilot
   Record** ([P] in the flight director) shows the career, flight totals and
   personal records on one tab and the achievements, with how many of the node's
   pilots hold each, on the other.
