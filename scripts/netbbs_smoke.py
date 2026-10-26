@@ -135,7 +135,11 @@ async def check(root, captures, width, height, scenario):
                 captures.mkdir(parents=True, exist_ok=True)
                 (captures / f"native-{width}x{height}.ans").write_text(caller.screen.restore_ansi(), encoding="utf-8")
                 if scenario == "crash":
-                    await caller.until("LANDER DOWN", task, seconds=20)
+                    # The crash scene holds its reason until a key, past its grace.
+                    await caller.until("[SPACE] Continue", task, seconds=20)
+                    await asyncio.sleep(1.4)
+                    caller.send(" ")
+                    await caller.until("LANDER DOWN", task)
                     caller.send("r")
                     await asyncio.sleep(.3)
                     assert "LANDER DOWN" not in "\n".join(caller.screen.text_rows())
