@@ -35,6 +35,7 @@ GRAVITY = 1.62
 DRY_MASS = 900.0
 MAX_THRUST = 3600.0
 FUEL_FLOW = 1.2
+TRACE_EVERY = 0.5
 
 
 class DoorError(Exception):
@@ -549,6 +550,8 @@ class Flight:
     status: str = "flying"
     reason: str = ""
     gravity: float = GRAVITY
+    # (altitude, fuel) every TRACE_EVERY seconds, for the debrief's descent trace.
+    trace: list = field(default_factory=list, repr=False, compare=False)
 
     def command(self, key: str):
         if key in ("a", "left"):
@@ -598,6 +601,8 @@ class Flight:
             raise ValueError("flight steps must be in (0, 0.1] seconds")
         if self.status != "flying" or self.contact():
             return
+        if self.elapsed >= len(self.trace) * TRACE_EVERY:
+            self.trace.append((max(0.0, self.y - self.terrain.height(self.x) - 3), self.fuel))
         # Limit travel to a quarter metre per collision check, including fast falls.
         steps = max(1, math.ceil((math.hypot(self.vx, self.vy) + 10) * dt / 0.25))
         h = dt / steps
@@ -1891,6 +1896,33 @@ def debrief_call(flight: Flight, mission: Mission, award=None) -> str:
     return CRASH_CALLS[pick % len(CRASH_CALLS)]
 
 
+def descent_trace(flight: Flight, width: int, blocks: bool = True) -> list[str]:
+    """Two sparklines for the debrief, altitude over the burn, and a hint when
+    the fuel plainly went early. Empty when the flight is too short to tell."""
+    samples = flight.trace + [(0.0, flight.fuel)]
+    if len(samples) < 4:
+        return []
+    ramp = "▁▂▃▄▅▆▇█" if blocks else " .:-=+*#"
+    columns = min(width, len(samples) - 1)
+    # Each column spans an equal share of the flight; burn is the fuel it used,
+    # against what full throttle would have used, altitude its highest point.
+    edges = [round(n * (len(samples) - 1) / columns) for n in range(columns + 1)]
+    top = max(a for a, _ in samples) or 1.0
+    alt, burn, used = [], [], []
+    for start, end in zip(edges, edges[1:]):
+        height = max(a for a, _ in samples[start:end + 1])
+        spent = samples[start][1] - samples[end][1]
+        full = FUEL_FLOW * TRACE_EVERY * (end - start)
+        alt.append(ramp[min(7, round(height / top * 7))])
+        burn.append(ramp[min(7, round(spent / full * 7))] if spent > 0 else " " if blocks else ".")
+        used.append(spent)
+    lines = ["ALT  " + "".join(alt), "BURN " + "".join(burn)]
+    total = sum(used)
+    if total > 0 and sum(used[:max(1, columns // 3)]) > .5 * total:
+        lines.append("Most of the fuel went in the first third of the descent.")
+    return lines
+
+
 def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
                  size: str = "small", across: int = 1) -> dict[tuple[int, int], str]:
     """Hull, legs and plume as roles, rotated together in square-pixel space.
@@ -2854,6 +2886,7 @@ class Display:
                      "", *((call,) if landed else (flight.reason, call)), "",
                      f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
                      f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", ""]
+            trace_at = len(lines) - 1
             award = self.deck.award
             if landed and award is not None and award.mission.key == mission.key:
                 # The score itself is in the record note below.
@@ -2872,6 +2905,12 @@ class Display:
                 retry = ""
             lines += [record_note or "Training flight / unranked", "",
                       retry + ("[M] Program" if self.deck.kind else "[M] Mission briefing"), self.back]
+            # The descent trace, where the card has room for it (not at 80x24 after a medal).
+            trace = descent_trace(flight, 55, unicode and self.host.charset in (None, "utf-8"))
+            while trace and len(lines) + len(trace) > c.height - 4:
+                trace.pop()
+            if len(trace) >= 2:
+                lines[trace_at:trace_at] = trace
         elif mode == "presets":
             view = self.deck.program or ProgramView()
             lines = [f"NEW PROGRAM / SEASON {view.season}", "",
