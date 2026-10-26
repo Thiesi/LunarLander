@@ -59,6 +59,9 @@ itself.
 - **Ghosts:** fly beside a faint outline of your own best run on a mission, or
   the node record holder's (**[G]** in the briefing chooses), and compare time
   and fuel in the debrief. **[W]** on a leaderboard replays the leader's landing.
+- **Rivals:** when another pilot passes one of your bests while you're away, the
+  mission is marked ▼ in the flight director and its briefing says who and by
+  how much; **[G]** can then put their run beside you.
 - **Descent trace:** the debrief draws altitude over the burn, so you can see
   where the fuel went, and says so when most of it went early.
 - **Presentation:** scenery in quadrant blocks, two pixels across each cell, with
