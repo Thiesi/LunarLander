@@ -3151,7 +3151,13 @@ TAGLINES = (
     "FLY IT LIKE THE TANK IS HALF EMPTY.",
 )
 
-SCENE_SECONDS = {"splash": 5.0, "launch": 3.0, "landing": 2.6, "crash": 2.4, "medal": 3.2, "promotion": 4.4}
+SCENE_SECONDS = {"splash": 5.0, "launch": 4.5, "landing": 2.6, "crash": 2.4, "medal": 3.2, "promotion": 4.4}
+# Played out, these hold their last frame until a key: a title to read, a medal
+# to admire.
+SCENE_HOLDS = ("splash", "medal")
+# A medal ignores keys until it has faded in, so a burn held through touchdown
+# cannot skip it unseen.
+MEDAL_GRACE = 1.2
 SCENE_MAX = (132, 50)
 SPLASH_PROMPT = "press any key to begin"
 
@@ -3392,11 +3398,11 @@ class Display:
                 # Ignition: a cough of sparks, then the plume steadies and the descent
                 # begins, slow enough to read the briefing over it.
                 fire = _span(t, .35, .9)
-                y = round(h * .4 + _ease(_span(t, .6, 2.8)) * h * .08)
+                y = round(h * .4 + _ease(_span(t, .6, 4.2)) * h * .08)
                 sprites.append((above(lander_sprite(0, .3 + .6 * fire if fire else 0, t, "large", across), y, pad_y),
                                 pad_c, y))
                 checks = ("GUIDANCE", "ATTITUDE", "THROTTLE", "RANGE")
-                lit = min(len(checks), int(_span(t, .1, 1.6) * (len(checks) + 1)))
+                lit = min(len(checks), int(_span(t, .1, 2.6) * (len(checks) + 1)))
                 parts = []
                 for n, word in enumerate(checks):
                     parts += [(("■ " if unicode else "# "), rgb(6) if n < lit else (50, 62, 92)),
@@ -4813,6 +4819,8 @@ class Game:
                 self.leaving = True
             return True
         if self.mode in SCENE_SECONDS:
+            if self.mode == "medal" and self.scene_age < MEDAL_GRACE:
+                return False
             self.finish_scene()
             return True
         if key == "?" or (key == "escape" and self.mode == "help"):
@@ -5018,8 +5026,7 @@ class Game:
         if self.mode in SCENE_SECONDS:
             if size_ok:
                 self.scene_age += elapsed
-                # The splash, played out, holds under its prompt until a key.
-                if self.scene_age >= SCENE_SECONDS[self.mode] and self.mode != "splash":
+                if self.scene_age >= SCENE_SECONDS[self.mode] and self.mode not in SCENE_HOLDS:
                     self.finish_scene()
             return
         if self.mode == "replay" and size_ok:
@@ -5224,11 +5231,11 @@ def run(host: Host, started: float) -> int:
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
-                    # splash's hold only twinkles, so idling costs little CPU.
+                    # holds of the splash and a medal only twinkle, so idling costs little CPU.
                     if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm", "record",
                                      "presets", "commit", "program-board", "tour", "tour-board", "postcard"):
                         next_frame = now + 1
-                    elif game.mode == "splash" and game.scene_age >= SCENE_SECONDS["splash"]:
+                    elif game.mode in SCENE_HOLDS and game.scene_age >= SCENE_SECONDS[game.mode]:
                         next_frame = now + .25
                     else:
                         next_frame = now + .1
