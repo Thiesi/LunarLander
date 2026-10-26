@@ -256,7 +256,7 @@ def drop_file_info(path: Path) -> dict:
 # width that it has. Its arrows, ► and • sit on control bytes, so they become text.
 CP437_GLYPHS = str.maketrans({
     "╭": "┌", "╮": "┐", "╰": "└", "╯": "┘", "━": "─", "┃": "│",
-    "←": "<", "→": ">", "↑": "^", "↓": "v", "►": ">", "●": "∙",
+    "←": "<", "→": ">", "↑": "^", "↓": "v", "►": ">", "▼": "v", "●": "∙",
     "▘": "▀", "▝": "▀", "▖": "▄", "▗": "▄", "▚": "▀", "▞": "▀",
     "▛": "█", "▜": "█", "▙": "█", "▟": "█",
 })
@@ -1332,6 +1332,21 @@ class Records:
                                                     (host.node,)):
             pilots.setdefault(user, {})[mission] = score
         return pilots
+
+    def rivals(self, host: Host, since: int) -> dict[str, tuple[str, int, int]]:
+        """Missions where another pilot's best passed this pilot's since `since`
+        (ns): the best of them, as handle, user id and score, by mission key."""
+        if not host.ranked:
+            return {}
+        found: dict[str, tuple[str, int, int]] = {}
+        for mission, handle, user, score in self.db.execute(
+                "SELECT o.mission, p.handle, o.user, o.score FROM scores m "
+                "JOIN scores o ON o.node=m.node AND o.mission=m.mission AND o.user<>m.user "
+                "JOIN pilots p ON p.node=o.node AND p.user=o.user "
+                "WHERE m.node=? AND m.user=? AND o.score>m.score AND o.achieved>? "
+                "ORDER BY o.score DESC, o.achieved", (host.node, host.user, since)):
+            found.setdefault(mission, (handle, user, score))
+        return found
 
     def ghost(self, host: Host, mission: Mission, user: int | None = None) -> bytes | None:
         """A pilot's best run on a mission, as stored: the caller's own unless `user` says."""
@@ -2627,6 +2642,7 @@ class Deck:
     program: ProgramView | None = None
     ghost: Ghost | None = None
     ghost_choice: str = ""
+    rivals: dict = field(default_factory=dict)
 
 
 def full_card(height: int) -> bool:
@@ -3201,6 +3217,8 @@ class Display:
                 c.rich(lx + 24, row, [(pip * entry.difficulty, 8 if entry.difficulty >= 4 else 5),
                                       (empty * (5 - entry.difficulty), 9)], bg)
                 c.rich(lx + 30, row, medal_parts(medal(entry, deck.bests.get(entry.key, 0)), unicode), bg)
+                if entry.key in deck.rivals:
+                    c.text(lx + 31, row, "▼" if unicode else "v", 8, bg)  # someone passed you here
             else:
                 c.text(lx + 24, row, "free", 9, bg)
         # The briefing.
@@ -3236,6 +3254,10 @@ class Display:
             ghost_line = f"Not ranked. [G] Ghost: {self.deck.ghost_choice}"
             if self.deck.ghost_choice and len(notes) == 2 and notes[1] == "Not ranked." and len(ghost_line) <= rw:
                 notes[1] = ghost_line
+        elif mission.key in deck.rivals and note.startswith("RANKED FLIGHT"):
+            handle, margin = deck.rivals[mission.key]
+            notes = [plain(f"PASSED BY {handle.upper()}: +{margin} PTS", rw),
+                     plain(f"[G] Ghost: {self.deck.ghost_choice}", rw)]
         elif self.deck.ghost_choice and note.startswith("RANKED FLIGHT"):
             notes = ["RANKED FLIGHT", plain(f"[G] Ghost: {self.deck.ghost_choice}", rw)]
         elif " / " in note:
@@ -3816,6 +3838,15 @@ class Game:
             except sqlite3.Error as exc:
                 print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
         self.grant(career_feats(self.bests, self.missions))
+        # Rivals: who passed this pilot's bests since the last visit, by mission.
+        self.rivals: dict[str, tuple[str, int, int]] = {}
+        if self.records is not None and self.host.ranked:
+            since = self.counters.get("last_seen", 0)
+            try:
+                self.rivals = self.records.rivals(self.host, int(since * 1e9)) if since else {}
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+            self.count({}, {}, {"last_seen": time.time()})
         self.unlocked: list[str] = []
         self.record_tab = self.record_scroll = 0
         self.rarity: tuple[dict, int] = ({}, 0)
@@ -3931,15 +3962,32 @@ class Game:
     def career(self) -> Career:
         return career(self.bests, self.missions)
 
+    def rival(self, key: str | None = None) -> tuple[str, int, int] | None:
+        """The pilot who passed this one on a mission, until this one passes them back."""
+        key = key or self.mission.key
+        found = self.rivals.get(key)
+        return found if found and found[2] > self.bests.get(key, 0) else None
+
+    def live_rivals(self) -> dict[str, tuple[str, int]]:
+        """For the flight director: by mission, who passed you and by how much."""
+        return {key: (found[0], found[2] - self.bests.get(key, 0))
+                for key in self.rivals if (found := self.rival(key))}
+
     def find_ghost(self, mode: str | None = None) -> tuple[bytes, str] | None:
         """The stored run the ghost choice names for the chosen mission, and its label."""
         mode = mode or self.ghost_mode
         if self.records is None or not self.mission.difficulty or mode == "off":
             return None
+        if mode == "rival" and not self.rival():
+            mode = "best"
         try:
             if mode == "mine":
                 data = self.records.ghost(self.host, self.mission) if self.host.ranked else None
                 return (data, "your best") if data else None
+            if mode == "rival" and self.rival():
+                handle, user, _ = self.rival()
+                data = self.records.ghost(self.host, self.mission, user)
+                return (data, f"{plain(handle, 16)}'s best") if data else None
             leaders = self.records.top(self.host, self.mission)
             if not leaders:
                 return None
@@ -4157,8 +4205,10 @@ class Game:
             self.select()
             return True
         if self.mode == "menu" and key == "g" and self.records is not None and self.mission.difficulty:
-            order = ("mine", "best", "off")
-            self.ghost_mode = order[(order.index(self.ghost_mode) + 1) % len(order)]
+            # A rival's run joins the choices on the missions where one passed you.
+            order = ("mine", "rival", "best", "off") if self.rival() else ("mine", "best", "off")
+            at = order.index(self.ghost_mode) if self.ghost_mode in order else order.index("best")
+            self.ghost_mode = order[(at + 1) % len(order)]
             return True
         if self.mode == "scores" and key == "w":
             self.replay = self.load_ghost("best")
@@ -4420,7 +4470,8 @@ def run(host: Host, started: float) -> int:
                                                              tuple(game.unlocked), game.logbook(),
                                                              "replay" if replay else game.kind,
                                                              game.program_view(), replay or game.ghost,
-                                                             game.ghost_choice() if game.mode == "menu" else ""))
+                                                             game.ghost_choice() if game.mode == "menu" else "",
+                                                             game.live_rivals()))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
