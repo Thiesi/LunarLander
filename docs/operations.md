@@ -234,7 +234,11 @@ is committed before the debrief appears. Simultaneous sessions retain the best s
 The records database has application ID `0x4C4C0001`. Schema 3 keeps pilots and
 their bests, running counters, achievements, Programs, each best's ghost and
 Grand Tours; a schema 1 or 2 file upgrades to it in place on its first open,
-adding tables only. A ghost is the best run's control log, compressed (well under
+adding tables only. Beside it, a `live` folder holds one small JSON file per
+pilot in a door (handle, the mission and what they're doing), rewritten as they
+fly and removed on exit; a door that dies goes stale after 20 seconds. It's
+safe to delete at any time and needs no backup; `DOOR_LL_LIVE=0` turns it off.
+A ghost is the best run's control log, compressed (well under
 4 KB); a daily's ghosts are deleted 14 days after its day. Schema 3 needs a
 NetBBS whose backups accept it (NetBBS #1577). A newer,
 incomplete, unrelated or corrupt database is refused and preserved. LL says records are unavailable, offers unranked

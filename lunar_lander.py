@@ -2141,6 +2141,79 @@ def debrief_call(flight: Flight, mission: Mission, award=None) -> str:
     return CRASH_CALLS[pick % len(CRASH_CALLS)]
 
 
+LIVE_STALE, LIVE_RESULT, LIVE_BEAT = 20.0, 60.0, 5.0  # seconds
+
+
+class Presence:
+    """Who else on the node is flying right now. Each door keeps one small file
+    in a folder beside the records, rewritten as its flight goes, refreshed
+    every few seconds and removed on exit; a door that dies goes stale."""
+
+    def __init__(self, folder: Path, host: Host):
+        self.folder, self.host = folder, host
+        self.path = folder / f"{re.sub(r'[^A-Za-z0-9_-]', '_', host.node)[:40]}-{host.user}.json"
+        self.state: dict | None = None
+        self.written = 0.0
+
+    def tell(self, state: dict, now: float):
+        """Publish this pilot's state ({"doing": ..., "mission": ..., "medal": ...})."""
+        changed = state != (self.state or {}).get("state")
+        if not changed and now - self.written < LIVE_BEAT:
+            return
+        if changed:
+            self.state = {"state": state, "since": now}
+        record = {"node": self.host.node, "handle": self.host.handle, "beat": now, **self.state}
+        try:
+            self.folder.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(record), encoding="utf-8")
+            os.replace(temporary, self.path)
+            self.written = now
+        except OSError:
+            pass  # a busy or read-only folder only costs the live line
+
+    def others(self, now: float) -> list[dict]:
+        """Everyone else on this node flying now, or just down (within a minute)."""
+        found = []
+        try:
+            paths = sorted(self.folder.glob("*.json"))[:64]
+        except OSError:
+            return []
+        for path in paths:
+            if path == self.path:
+                continue
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                state, since, beat = record["state"], float(record["since"]), float(record["beat"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if record.get("node") != self.host.node or now - beat > LIVE_STALE or not isinstance(state, dict):
+                continue
+            doing = state.get("doing")
+            if doing == "descending" or doing in ("landed", "crashed") and now - since <= LIVE_RESULT:
+                found.append({"handle": plain(str(record.get("handle", "")), 16), **state})
+        return found
+
+    def close(self):
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def live_line(others: list[dict], now: float) -> str:
+    """One line about the others, taking turns every four seconds."""
+    if not others:
+        return ""
+    other = others[int(now / 4) % len(others)]
+    mission = plain(str(other.get("mission", "")), 24)
+    if other["doing"] == "descending":
+        return f"{other['handle']} is descending on {mission}..."
+    if other["doing"] == "landed":
+        return f"{other['handle']} landed on {mission}" + (f": {other['medal'].lower()}" if other.get("medal") else "")
+    return f"{other['handle']} came down hard at {mission}"
+
+
 GHOST_COLOR = (92, 116, 160)
 GHOST_KEEP_DAYS = 14  # a daily's ghost outlives its day by this long
 
@@ -2789,6 +2862,7 @@ class Deck:
     ifr: bool = False
     craft: str = "lm"
     fleet: tuple = ("lm",)
+    live: str = ""
 
 
 def full_card(height: int) -> bool:
@@ -3371,6 +3445,12 @@ class Display:
         compact = box_h < 20
         top = y0 + (3 if compact else 4)
         c.frame(x0, y0, box_w, box_h, "LUNAR LANDER / FLIGHT DIRECTOR", unicode)
+        if deck.live:
+            # Who else is flying, set into the card's bottom edge.
+            live = plain(deck.live, box_w - 10)
+            c.text(x0 + 2, y0 + box_h - 1, "┤ " if unicode else "[ ", EDGE, PANEL)
+            c.text(x0 + 4, y0 + box_h - 1, live, 6, PANEL)
+            c.text(x0 + 4 + _cells(live), y0 + box_h - 1, " ├" if unicode else " ]", EDGE, PANEL)
         lx, rx = x0 + 3, x0 + 37
         rw = box_w - (rx - x0) - 3
         rule = ("─" if unicode else "-") * (box_w - 2)
@@ -4216,6 +4296,17 @@ class Game:
     def career(self) -> Career:
         return career(self.bests, self.missions)
 
+    def live_state(self) -> dict:
+        """This pilot's state for the live line: descending, just down, or idle."""
+        title = mission_title(self.mission)
+        if self.mode in ("launch", "flying", "paused") and self.flight.status == "flying":
+            return {"doing": "descending", "mission": title}
+        if self.mode in ("landing", "crash", "medal", "promotion", "debrief", "postcard") \
+                and self.flight.status in ("landed", "crashed"):
+            medal_won = self.award.medal if self.award is not None and self.flight.status == "landed" else None
+            return {"doing": self.flight.status, "mission": title, "medal": medal_won}
+        return {"doing": "idle"}
+
     def fleet(self) -> list[str]:
         """The craft this pilot's rank has unlocked, the LM first."""
         level = self.career().level
@@ -4776,6 +4867,10 @@ def run(host: Host, started: float) -> int:
                 splash=os.environ.get("DOOR_LL_SPLASH") != "0" and os.environ.get("DOOR_SPLASH", "").strip().lower()
                 not in ("0", "off", "no", "false"))
     game.record_note = game.ranking_note()
+    presence = None
+    if records is not None and os.environ.get("DOOR_LL_LIVE", "").strip().lower() not in ("0", "off", "no", "false"):
+        presence = Presence(root / "live", host)
+    live = ""
     game.announcer = Announcer.for_launch(host, records)
     if game.announcer is not None:
         game.announcer.standings(game.missions)
@@ -4813,6 +4908,10 @@ def run(host: Host, started: float) -> int:
                     if (updated.width, updated.height, updated.color, updated.unicode) != (host.width, host.height, host.color, host.unicode):
                         display = Display(updated)
                     host = updated
+                    if presence is not None:
+                        wall = time.time()
+                        presence.tell(game.live_state(), wall)
+                        live = live_line(presence.others(wall), wall)
                     next_check = now + 0.5
                 game.tick(now - last_tick, host.width >= 80 and host.height >= 24)
                 last_tick = now
@@ -4831,7 +4930,8 @@ def run(host: Host, started: float) -> int:
                                                              game.program_view(), replay or game.ghost,
                                                              game.ghost_choice() if game.mode == "menu" else "",
                                                              game.live_rivals(), game.tour_view(), game.ifr,
-                                                             game.craft, tuple(game.fleet())))
+                                                             game.craft, tuple(game.fleet()),
+                                                             live if game.mode == "menu" else ""))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
@@ -4857,6 +4957,8 @@ def run(host: Host, started: float) -> int:
                         break
                 data = None
     finally:
+        if presence is not None:
+            presence.close()
         if records:
             records.close()
         for sig, handler in previous.items():
