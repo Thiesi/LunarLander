@@ -98,6 +98,20 @@ class DisplayPixelTests(unittest.TestCase):
                     self.assertEqual((host.charset, host.unicode, ll.Display(host).across),
                                      (charset, unicode, across))
 
+    def test_netbbs_says_whether_the_font_has_quadrants(self):
+        # NetBBS 7.43.0 sends `quadrants` (NetBBS #1560): false for a caller whose
+        # font lacks them, who then gets half blocks rather than NetBBS's substitutes.
+        with mock.patch.dict(os.environ, {"DOOR_LL_PIXELS": ""}):
+            for fields, quadrants, across in (({}, None, 2),
+                                              ({"quadrants": True}, True, 2),
+                                              ({"quadrants": False}, False, 1),
+                                              ({"quadrants": 0}, None, 2),
+                                              ({"quadrants": "false"}, None, 2),
+                                              ({"quadrants": True, "charset": "cp437"}, True, 1)):
+                with self.subTest(fields=fields):
+                    host = self.load(**fields)
+                    self.assertEqual((host.quadrants, ll.Display(host).across), (quadrants, across))
+
     def test_a_cp437_caller_never_gets_a_quadrant(self):
         quadrants = set(ll.QUADRANTS[1:]) - {"▀", "▌", "▐", "▄", "█"}
         host = ll.Host(132, 50, "256", True, pixels="quad", charset="cp437")

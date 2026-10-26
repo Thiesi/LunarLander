@@ -149,9 +149,15 @@ the same account identity. LL cannot infer guest privileges from the public API.
 256 colors are the default local presentation; NetBBS callers get their published
 16/256/truecolor palette and Unicode preference. Unicode callers see the scenery
 in quadrant blocks (`▖▗▘▝▚▞` and kin), two pixels across each cell. Almost every
-current terminal font draws them, as does the NetBBS web terminal; for one that
-does not, set `DOOR_LL_PIXELS=half` in the profile environment to draw with half
-blocks only, as releases up to v0.1.0 did.
+current terminal font draws them, as does the NetBBS web terminal. Some do not,
+among them Courier New and Consolas, PuTTY's usual defaults on Windows, which
+show a box for each quadrant. NetBBS 7.43.0 and later tell the door per caller
+(`quadrants` in the door metadata,
+[NetBBS #1560](https://github.com/Thiesi/NetBBS/issues/1560)): a caller sets
+Profile ▸ Quarter blocks to On or Off, and Auto turns them off for PuTTY. When
+they are off, the door draws that caller's scenery in half blocks. On an older
+NetBBS, set `DOOR_LL_PIXELS=half` in the profile environment to draw with half
+blocks for everyone, as releases up to v0.1.0 did.
 
 CP437 terminals such as SyncTERM have half blocks but no quadrants. When NetBBS
 tells the door the caller's character set (`charset` in the door metadata,
@@ -259,6 +265,7 @@ delete a broken database, clear its schema version, or substitute another node's
 | Door cannot start | Check absolute Python/script/install paths and service-account permissions; inspect NetBBS's Last diagnostic |
 | Practice only | Confirm node/account metadata and writable `DOOR_LL_DATA_DIR`; read stderr for the precise database failure |
 | Garbled blocks/colors | Confirm UTF-8 profile and terminal encoding; select a suitable NetBBS glyph/color preference |
+| Boxes in the scenery or the wordmark's corners | A font without quarter blocks (PuTTY's Courier New or Consolas); the caller sets Profile ▸ Quarter blocks to Off (NetBBS 7.43.0) or picks a font such as Cascadia Code, or the node sets `DOOR_LL_PIXELS=half` |
 | Question marks in the scenery | A CP437 terminal (SyncTERM) on a NetBBS that does not send the caller's `charset`; set `DOOR_LL_PIXELS=half` |
 | "Exited unexpectedly (code -9)" | The CPU-seconds ceiling killed the door; raise the profile's `cpu_seconds` to 900 and use this release, which exits cleanly before the ceiling |
 | Flight paused for size | Enlarge to 80x24 |
