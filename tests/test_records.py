@@ -15,6 +15,15 @@ def land(mission):
     """A 10 Hz pilot using the same angle/throttle increments as human controls."""
     flight = mission.launch()
     for frame in range(3000):
+        if mission.ascent and flight.touchdowns:
+            # A sample return's climb: upright, at full throttle, through the line.
+            flight.command("x")
+            flight.command("9")
+            for _ in range(6):
+                flight.step()
+            if flight.status != "flying":
+                return flight
+            continue
         pad = flight.terrain.pad
         target = (pad.left + pad.right) / 2 if mission.hop else mission.center
         ridge = 0.0

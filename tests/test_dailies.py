@@ -30,8 +30,9 @@ class DailyTests(unittest.TestCase):
                 with self.subTest(day=day, mission=mission.key):
                     inside = lambda value, span: min(span) <= value <= max(span)
                     self.assertIn(mission.difficulty, difficulties)
-                    # A weekend hop carries fuel for its second leg over lower ground.
-                    extra = ll.HOP_FUEL if mission.hop else 0
+                    # A weekend hop carries fuel for its second leg over lower ground,
+                    # a sample return for its climb.
+                    extra = ll.HOP_FUEL if mission.hop else ll.ASCENT_FUEL if mission.ascent else 0
                     for value, span in ((mission.width, widths), (abs(mission.drift), drifts),
                                         (mission.fuel - extra, fuels), (mission.sink, sinks)):
                         self.assertTrue(inside(value, span), (value, span))

@@ -5,7 +5,7 @@
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, three daily challenges, medals for every
-safe landing, 60 achievements, a career from Cadet to Lunar Ace, and Programs:
+safe landing, 62 achievements, a career from Cadet to Lunar Ace, and Programs:
 practise in the simulator, then fly each mission for real exactly once. Read the
 drift. Watch the fuel. Make both feet count.
 
@@ -34,8 +34,11 @@ itself.
 - **Missions:** a training basin and fifteen ranked missions in three chapters
   (Maria, Highlands, Frontier), plus three daily challenges, new at the node's
   local midnight: one in the manner of each chapter, from a broad sea to a lean
-  frontier run. At weekends the Frontier daily is a **hop**: land on one pad,
-  lift off, and land on a second one further along.
+  frontier run. At weekends all three are specials: the Maria daily is a
+  **sample return** (land, then lift off through the ascent line), the
+  Highlands daily a **rover rendezvous** (park within 20 m of a parked rover,
+  not on it) and the Frontier daily a **hop** (land on one pad, lift off, and
+  land on a second one further along).
 - **History:** five real descents at the game's scale, each with its twist:
   Apollo 11's alarms and boulder field, Apollo 12's pinpoint landing beside
   Surveyor 3, Apollo 15 over the Apennines, Apollo 17 into a narrow valley and
@@ -61,8 +64,8 @@ itself.
 - **Grand Tour:** **[T]** flies all fifteen ranked missions in order, in one
   sitting: a crash means flying that mission again, the clock counts flight time
   only, and the node's best tours have their own board.
-- **Achievements:** 60 of them, from milestones and precision touchdowns to
-  close calls, hops, history, instrument landings, the fleet, the Grand Tour, career feats, Programs and ten hidden ones. The **Pilot
+- **Achievements:** 62 of them, from milestones and precision touchdowns to
+  close calls, weekend specials, history, instrument landings, the fleet, the Grand Tour, career feats, Programs and ten hidden ones. The **Pilot
   Record** ([P] in the flight director) shows the career, flight totals and
   personal records on one tab and the achievements, with how many of the node's
   pilots hold each, on the other.
