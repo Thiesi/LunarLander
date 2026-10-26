@@ -46,7 +46,15 @@ Missions are grouped in chapters, all open from the start:
   the craft stands upright on it and the second pad, 220 to 320 m along, is lit.
   Thrust lifts it off (it stays upright until 2 m clear, and settling back
   softly stands it on the pad again). A hop carries 40 kg more fuel, flies over
-  ground no higher than 110 m, and scores its worse touchdown.
+  ground no higher than 110 m, and scores its worse touchdown. The other two
+  dailies are weekend specials too. Maria's is a sample return: after a safe
+  touchdown the craft stands on the pad, and lifting off through a dashed
+  ascent line 100 to 140 m above it ends the mission; it carries 30 kg more
+  fuel, settling back softly stands it on the pad again, and it scores its
+  worst touchdown, not the climb. Highlands' is a rover rendezvous: a rover is
+  parked on the pad 10 to 14 m from its centre. Coming down within 6 m of it
+  is a crash; a safe landing over 20 m from it is not scored (no best, medal or
+  ghost) though it counts as a landing.
 
 Every safe landing on a ranked mission earns a medal from the pilot's best score
 there, per point of the mission's difficulty: bronze for any safe landing, silver
@@ -58,8 +66,8 @@ releases keep what they earned and no migration is needed. The dailies show
 today's medals but do not count toward rank. Callers without a NetBBS
 identity earn medals for the session only.
 
-Ranked flights also count toward 60 achievements: milestones (landings, time in
-the air, crashes, simulator time), precision and close-call landings, hops, history, instrument landings, the fleet, the Grand Tour, nine
+Ranked flights also count toward 62 achievements: milestones (landings, time in
+the air, crashes, simulator time), precision and close-call landings, weekend specials, history, instrument landings, the fleet, the Grand Tour, nine
 hidden spectacular crashes, completed Programs, and career feats from bests (chapters landed and gold, the top rank,
 all three dailies in a day, daily streaks). Achievements that bests already earn
 are awarded quietly the first time a pilot launches this release. The debrief

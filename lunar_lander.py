@@ -45,6 +45,9 @@ CRAFT = {
     "altair": ("ALTAIR", 1600.0, 4800.0, 1.25, 5, 0.6, 6),
 }
 TRACE_EVERY = 0.5
+# A rover rendezvous: park within ROVER_REACH m of the rover, but no nearer
+# than ROVER_CLEAR (its half width and the feet's), or the craft is on it.
+ROVER_REACH, ROVER_CLEAR = 20.0, 6.0
 
 
 class DoorError(Exception):
@@ -577,6 +580,10 @@ class Flight:
     liftoff: float | None = None
     # Other smooth sites; a landing on any is a landing on the pad.
     sites: tuple = ()
+    # A sample return: after landing, climb this far above the pad (0: none).
+    ascent: float = 0.0
+    # A rover rendezvous: where the rover is parked on the pad (None: none).
+    rover: float | None = None
     # Physics steps flown, and (step, throttle, angle) whenever the controls
     # change: with the mission, all a ghost needs to fly the run again.
     steps: int = field(default=0, repr=False, compare=False)
@@ -622,17 +629,21 @@ class Flight:
             self.terrain, pad = replace(self.terrain, pad=chosen), chosen
         if not all(pad.left <= x <= pad.right for x, _ in feet):
             reason = "Terrain strike: put both landing feet inside the lit pad."
+        elif self.rover is not None and abs(self.x - self.rover) < ROVER_CLEAR:
+            reason = "Rover strike: park beside the rover, not on it."
         elif abs(self.angle) > 10:
             reason = "Attitude: land within 10 degrees of upright."
         elif abs(self.vx) > 2:
             reason = "Sideways drift: reduce horizontal speed to 2 m/s or less."
         elif abs(self.vy) > 3:
             reason = "Hard impact: reduce vertical speed to 3 m/s or less."
-        elif self.pads:
-            # A hop: down on this pad, the next one lit. The craft stands upright
-            # on its feet until the engine lifts it.
+        elif self.pads or self.ascent:
+            # A hop: down on this pad, the next one lit. A sample return: down,
+            # and the ascent still to fly. The craft stands upright on its feet
+            # until the engine lifts it.
             self.touchdowns.append((self.vy, self.vx))
-            self.terrain, self.pads = replace(self.terrain, pad=self.pads[0]), self.pads[1:]
+            if self.pads:
+                self.terrain, self.pads = replace(self.terrain, pad=self.pads[0]), self.pads[1:]
             self.x, self.y, self.vx, self.vy, self.angle = (self.x, pad.height + 3.01, 0.0, 0.0, 0.0)
             self.resting = True
             return True
@@ -686,18 +697,31 @@ class Flight:
             self.vy += ay * h
             self.fuel -= burn
             self.elapsed += h
+            if self.ascent and self.touchdowns and self.y - 3 - self.terrain.pad.height >= self.ascent:
+                self.status, self.reason = "landed", "Ascent stage through the line. Samples on their way home."
+                return
             if self.x < 3 or self.x > 997 or self.y > 800:
                 self.status, self.reason = "crashed", "Flight corridor exceeded. Stay within 0-1000 m and below 800 m."
                 return
             if self.contact():
                 return
 
+    def met(self) -> bool:
+        """Whether a landing did what the mission asked: a rendezvous parks
+        near the rover. A safe landing too far off is not scored."""
+        return self.rover is None or abs(self.x - self.rover) <= ROVER_REACH
+
+    def touchdown(self) -> tuple[float, float]:
+        """The (vy, vx) the craft came down at: a sample return's last touchdown,
+        not its climb through the line."""
+        return self.touchdowns[-1] if self.ascent and self.touchdowns else (self.vy, self.vx)
+
     def score(self, difficulty: int = 1) -> int:
-        if self.status != "landed":
+        if self.status != "landed" or not self.met():
             return 0
-        # A hop scores its worst touchdown.
+        # A hop scores its worst touchdown; a sample return, its touchdowns, not the climb.
         precision = min(max(0, 1 - abs(vy) / 3) + max(0, 1 - abs(vx) / 2)
-                        for vy, vx in (*self.touchdowns, (self.vy, self.vx)))
+                        for vy, vx in (self.touchdowns if self.ascent else (*self.touchdowns, (self.vy, self.vx))))
         return round(difficulty * (1000 + 500 * self.fuel / self.initial_fuel + 250 * precision))
 
 
@@ -730,6 +754,10 @@ class Mission:
     sites: tuple = ()
     # A landmark on the ground: (x, label), such as Surveyor 3 beside Apollo 12.
     marker: tuple | None = None
+    # A sample return's ascent line, metres above the pad (0: none).
+    ascent: float = 0.0
+    # A rover rendezvous: the rover's place on the pad (None: none).
+    rover: float | None = None
 
     def launch(self) -> Flight:
         if self.difficulty == 0:
@@ -747,7 +775,7 @@ class Mission:
         return Flight(Terrain(tuple(sorted(points)), pad), x=self.center + self.offset,
                       y=self.altitude, vx=self.drift, vy=self.sink, fuel=self.fuel, initial_fuel=self.fuel,
                       gravity=self.gravity, pads=pads[1:], dry_mass=dry_mass, thrust=thrust,
-                      tilt_step=tilt_step, lag=lag, sites=sites)
+                      tilt_step=tilt_step, lag=lag, sites=sites, ascent=self.ascent, rover=self.rover)
 
 
 # The day's three challenges, one in the manner of each chapter. Every setting
@@ -814,6 +842,28 @@ def hopped(mission: Mission, rng: random.Random) -> Mission:
                    relief=(min(floor, HOP_CEILING - 30), min(ceiling, HOP_CEILING)))
 
 
+# A sample return: land, then lift off through a line this high above the
+# pad (m), with this much more fuel (kg). Maria's daily at weekends.
+ASCENT_LINE, ASCENT_FUEL = (100, 140), 30
+ASCENT_BRIEFING = "Weekend sample return: land, then lift off through the ascent line."
+# A rover rendezvous: the rover parked this far (m) from the pad's centre.
+# Highlands' daily at weekends.
+ROVER_OFFSET = (10, 14)
+ROVER_BRIEFING = "Weekend rendezvous: park within 20 m of the rover, not on it."
+
+
+def sample_return(mission: Mission, rng: random.Random) -> Mission:
+    """The mission as a sample return: an ascent line, and fuel to climb to it."""
+    return replace(mission, description=ASCENT_BRIEFING, ascent=float(rng.randint(*ASCENT_LINE)),
+                   fuel=mission.fuel + ASCENT_FUEL)
+
+
+def rendezvous(mission: Mission, rng: random.Random) -> Mission:
+    """The mission as a rover rendezvous: the rover parked on the pad, off centre."""
+    rover = mission.center + rng.choice((-1, 1)) * rng.randint(*ROVER_OFFSET)
+    return replace(mission, description=ROVER_BRIEFING, rover=float(rover), marker=(rover, "ROVER"))
+
+
 def daily_missions(day: str, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
     """The day's three dailies. A pure function of the date: every node and
     every pilot flies the same three on the same day."""
@@ -824,8 +874,10 @@ def daily_missions(day: str, date_format: str = "%Y-%m-%d") -> tuple[Mission, ..
         rng = random.Random(f"lunar-lander/daily/{day}/{key}")
         mission = generated_mission(f"daily-{day}-{key}", f"{name} {stamp}", briefing, tuple(spans), rng,
                                     rng.random(), int(day.replace("-", "")) * 10 + n)
-        if weekend and key == "frontier":
-            mission = hopped(mission, random.Random(f"lunar-lander/daily/{day}/{key}/hop"))
+        if weekend:
+            # The weekend specials: a sample return, a rendezvous and a hop.
+            special = {"maria": sample_return, "highlands": rendezvous, "frontier": hopped}[key]
+            mission = special(mission, random.Random(f"lunar-lander/daily/{day}/{key}/{special.__name__}"))
         dailies.append(mission)
     return tuple(dailies)
 
@@ -882,10 +934,15 @@ HISTORIC = (
 
 
 def history_line(mission: Mission, flight: Flight) -> str:
-    """What the real crew did, beside what this pilot did, for the debrief."""
+    """What the real crew did, beside what this pilot did, for the debrief;
+    or how near the rover a rendezvous parked."""
     key = mission.key.split("@", 1)[0]
     if flight.status != "landed":
         return ""
+    if flight.rover is not None:
+        off = abs(flight.x - flight.rover)
+        return (f"Parked {off:.0f} m from the rover: a short walk." if flight.met() else
+                f"Down safely, but {off:.0f} m from the rover: no rendezvous, no score.")
     if key == "apollo11":
         left = hover_seconds(flight.fuel, flight.gravity, flight.dry_mass, flight.thrust)
         return f"Eagle landed after Houston's \"30 seconds\"; you had {left:.0f} s."
@@ -1116,9 +1173,11 @@ _CATALOGUE = (
         ("streak-7", "Week on the Moon", "SILVER", "Land a daily seven days running"),
         ("streak-30", "Moonstruck", "GOLD", "Land a daily thirty days running"),
         ("daily-gold", "Frontier Gold", "SILVER", "Gold on a Frontier daily"))),
-    ("HOPS", (
+    ("WEEKENDS", (
         ("hop", "Grasshopper", "BRONZE", "Land both pads of a hop"),
-        ("hop-gold", "Kangaroo", "SILVER", "Earn gold on a hop"))),
+        ("hop-gold", "Kangaroo", "SILVER", "Earn gold on a hop"),
+        ("sample-return", "Sample Return", "BRONZE", "Lift samples through the line"),
+        ("rendezvous", "Rendezvous", "BRONZE", "Park within 20 m of the rover"))),
     ("INSTRUMENTS", (
         ("ifr", "Blind Faith", "BRONZE", "Land on instruments alone"),
         ("ifr-gold", "Cross-Pointer", "SILVER", "Earn gold on instruments alone"))),
@@ -1186,9 +1245,13 @@ def flight_feats(mission: Mission, flight: Flight) -> set[str]:
     pad = flight.terrain.pad
     centre = (pad.left + pad.right) / 2
     feet = flight.feet()
-    vy, vx, tilt = abs(flight.vy), abs(flight.vx), abs(flight.angle) + 1e-9
+    vy, vx = (abs(v) for v in flight.touchdown())
+    tilt = abs(flight.angle) + 1e-9
     got = set()
-    if flight.status == "landed":
+    if flight.status == "landed" and flight.ascent:
+        # The craft is in the air: its touchdown's precision is in the score.
+        got.add("sample-return")
+    elif flight.status == "landed":
         middle = sum(x for x, _ in feet) / 2
         for key, met in (("feather", vy < .3), ("no-drift", vx < .1), ("dead-centre", abs(middle - centre) <= 1),
                          ("fuel-miser", flight.fuel >= .75 * flight.initial_fuel), ("fumes", flight.fuel < 1),
@@ -1205,6 +1268,8 @@ def flight_feats(mission: Mission, flight: Flight) -> set[str]:
             got.add("ifr")
             if medal(mission, flight.score(mission.difficulty)) == "GOLD":
                 got.add("ifr-gold")
+        if flight.rover is not None and flight.met():
+            got.add("rendezvous")
         if flight.touchdowns:
             got.add("hop")
             if medal(mission, flight.score(mission.difficulty)) == "GOLD":
@@ -1425,7 +1490,7 @@ class Records:
                             (host.node, host.user, host.handle))
 
     def save(self, host: Host, mission: Mission, flight: Flight) -> bool:
-        if not host.ranked or not mission.difficulty or flight.status != "landed":
+        if not host.ranked or not mission.difficulty or flight.status != "landed" or not flight.met():
             return False
         try:
             self.db.execute("BEGIN IMMEDIATE")
@@ -2313,6 +2378,15 @@ def flag_sprite(across: int = 1) -> dict:
     for dy in range(6, 10):
         for dx in range(1, 1 + 7 * across):
             sprite[(dx, -dy)] = (stripe if dy == 7 else cloth, "=" if dy == 7 else "#")
+    return sprite
+
+
+def rover_sprite(across: int = 1) -> dict:
+    """A parked rover, wheels on the ground at (0, 0): body, mast and dish."""
+    body, wheel, dish = (206, 208, 216), (84, 86, 96), (232, 186, 70)
+    sprite = {(dx, -1): (wheel, "o") for dx in range(-2 * across, 3 * across) if (dx // across) % 2 == 0}
+    sprite.update({(dx, -2): (body, "=") for dx in range(-2 * across, 3 * across)})
+    sprite.update({(across, -3): (body, "|"), (across, -4): (dish, "o")})
     return sprite
 
 
@@ -3334,9 +3408,11 @@ class Display:
             # contact light), a crash's under the reason it ended.
             call = debrief_call(flight, mission, self.deck.award)
             call = f'CAPCOM: "{call}"' if len(call) <= 50 else f'"{call}"'
-            lines = ["CONTACT LIGHT / LANDED" if landed else "SIGNAL LOST / LANDER DOWN",
+            touch_vy, touch_vx = flight.touchdown()
+            lines = [("ASCENT / SAMPLES ABOARD" if flight.ascent else "CONTACT LIGHT / LANDED") if landed
+                     else "SIGNAL LOST / LANDER DOWN",
                      "", *((call,) if landed else (flight.reason, call)), "",
-                     f"Vertical {flight.vy:+.2f} m/s | Drift {flight.vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
+                     f"Vertical {touch_vy:+.2f} m/s | Drift {touch_vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
                      f"Fuel remaining {flight.fuel:.1f} kg | Flight time {flight.elapsed:.1f}s", ""]
             trace_at = len(lines) - 1
             award = self.deck.award
@@ -3868,6 +3944,9 @@ class Display:
                      lander_sprite(ghost.angle, 0, 0, size, across).items()}
             sprites.append(({(dx, dy): v for (dx, dy), v in shade.items()
                              if 0 <= gx + dx < px_w and 0 <= gy + dy < ground_row[gx + dx]}, gx, gy))
+        if flight.rover is not None:
+            rx = round((flight.rover - left) / step - (across - 1) / 2)
+            sprites.append((rover_sprite(across), rx, row_of(ground.height(flight.rover))))
         if flight.status == "crashed":
             sprites.append((explosion(1.6, 4, 9, across), sx,
                             min(px_h - 1, row_of(ground.height(flight.x)) - 1)))
@@ -3910,6 +3989,14 @@ class Display:
             if self.frame % 6 < 4:
                 c.text(max(0, (c.width - len(alarm) - 4) // 2), view_y + 3, f"  {alarm}  ", (16, 12, 22),
                        (255, 186, 60))
+        if flight.ascent:
+            # A sample return's ascent line, across the sky above the pad.
+            line_row = view_y + row_of(flight.terrain.pad.height + 3 + flight.ascent) // 2
+            if view_y <= line_row < view_y + view_h:
+                dashes = ("╌" if unicode else "-") * width
+                c.text(0, line_row, dashes, 9 if flight.touchdowns else 12, None)
+                label = " ASCENT LINE "
+                c.text(max(0, (width - len(label)) // 2), line_row, label, 9 if flight.touchdowns else 12, None)
         for n, ahead in enumerate(flight.pads, 2):
             # A hop's pads to come: named by their order, not yet lit.
             middle = round(((ahead.left + ahead.right) / 2 - left) / (metres / across))
@@ -3991,7 +4078,9 @@ class Display:
             return
         if len(flight.touchdowns) > state[5]:
             state[5] = len(flight.touchdowns)
-            state[1], state[2] = "Contact. Lift off for the next pad when ready.", flight.elapsed + 4
+            state[1] = ("Contact. Samples aboard: lift off through the line." if flight.ascent else
+                        "Contact. Lift off for the next pad when ready.")
+            state[2] = flight.elapsed + 4
             state[3] = fuel_alert(flight)  # the hop's own call, not a stale fuel one
         level = fuel_alert(flight)
         if level != state[3]:
@@ -3999,6 +4088,7 @@ class Display:
             if level in FUEL_CALLS:
                 state[1], state[2] = FUEL_CALLS[level], flight.elapsed + 3
         elif (altitude < RADIO_LOW and flight.elapsed >= state[2] and not flight.resting
+              and not (flight.ascent and flight.touchdowns)
               and flight.elapsed - state[4] >= RADIO_EVERY):
             state[1], state[2], state[4] = altitude_call(altitude, flight), flight.elapsed + 2.5, flight.elapsed
         if state[1] and flight.elapsed < state[2]:
@@ -4836,7 +4926,9 @@ class Game:
             if self.flight.status != "flying":
                 saved = False
                 self.award, self.queue = None, []
-                if self.flight.status == "landed" and self.mission.difficulty and self.records and self.host.ranked:
+                if self.flight.status == "landed" and not self.flight.met():
+                    self.record_note = "No rendezvous with the rover: not scored"
+                elif self.flight.status == "landed" and self.mission.difficulty and self.records and self.host.ranked:
                     try:
                         best = self.records.save(self.host, self.mission, self.flight)
                         saved = True
@@ -4844,7 +4936,7 @@ class Game:
                     except sqlite3.Error as exc:
                         self.record_note = "Landing not saved: storage error. Ask your SysOp."
                         print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
-                if self.flight.status == "landed" and self.mission.difficulty:
+                if self.flight.status == "landed" and self.mission.difficulty and self.flight.met():
                     self.award = self.reward()
                     self.queue = ["medal"] * bool(self.award.medal) + ["promotion"] * bool(self.award.promoted)
                     if saved and self.announcer is not None:
