@@ -231,9 +231,12 @@ Separate nodes cannot read each other's scores even if they share a directory.
 Prefer separate directories anyway. Active flights have no resumable save; a result
 is committed before the debrief appears. Simultaneous sessions retain the best score.
 
-The records database has application ID `0x4C4C0001`. Schema 2 keeps pilots and
-their bests, running counters, achievements and Programs; a schema 1 file
-upgrades to it in place on its first open, adding tables only. A newer,
+The records database has application ID `0x4C4C0001`. Schema 3 keeps pilots and
+their bests, running counters, achievements, Programs, each best's ghost and
+Grand Tours; a schema 1 or 2 file upgrades to it in place on its first open,
+adding tables only. A ghost is the best run's control log, compressed (well under
+4 KB); a daily's ghosts are deleted 14 days after its day. Schema 3 needs a
+NetBBS whose backups accept it (NetBBS #1577). A newer,
 incomplete, unrelated or corrupt database is refused and preserved. LL says records are unavailable, offers unranked
 play and writes a bounded stderr diagnostic for NetBBS's door-session history.
 A write failure on touchdown clearly says the landing was not saved.
