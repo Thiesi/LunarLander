@@ -1,8 +1,21 @@
 # Release acceptance
 
-Target: `v0.7.0`. It is not a claim that every NetBBS transport or target
+Target: `v0.7.1`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.7.1: a sample return's records
+
+- Three bugs found by NetBBS's review of v0.7.0 (Thiesi/NetBBS PR #1585),
+  all in the sample return, which ends in the air at the ascent line:
+  the pilot's softest-touchdown record came from the speed at the line, and
+  the closest-landing record from a mid-air position (now the touchdown's
+  speed, and no closest record for a sample return); a successful return
+  could earn crash achievements such as Dead Stick; and a crash after lifting
+  off was judged by the earlier soft touchdown, not the impact.
+- 244 tests (unittest); each new test fails on v0.7.0. Hosted CI with the
+  real NetBBS 7.40.0 runtime on Linux and Windows passed on the release
+  commit. Saved data is unchanged from v0.6.0 (schema 3).
 
 ## v0.7.0: weekend specials and the Hopper
 

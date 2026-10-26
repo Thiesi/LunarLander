@@ -154,6 +154,48 @@ class SampleReturnTests(unittest.TestCase):
         self.assertIn("Vertical -1.0", text)
 
 
+class RecordTests(unittest.TestCase):
+    """A sample return's records, feats and debrief come from its touchdown,
+    never from the climb (from NetBBS's review of v0.7.0)."""
+
+    def setUp(self):
+        self.mission = ll.daily_missions(SATURDAY)[0]
+
+    def flown(self):
+        flight = self.mission.launch()
+        settle_on(flight, flight.terrain.pad, vy=-1.5)
+        flight.command("9")
+        while flight.status == "flying":
+            flight.step()
+        return flight
+
+    def test_the_log_books_the_touchdown_not_the_line(self):
+        flight = self.flown()
+        flight.vy, flight.fuel = 0.01, 0  # coasting through the line on an empty tank
+        _, lowest, _ = ll.flight_log(self.mission, flight, "landed")
+        self.assertAlmostEqual(lowest["softest"], 1.5, delta=.1)
+        self.assertNotIn("closest", lowest)
+
+    def test_a_return_earns_no_crash_feats(self):
+        flight = self.flown()
+        flight.fuel, flight.angle = 0, 55
+        self.assertEqual(ll.flight_feats(self.mission, flight), {"sample-return"})
+
+    def test_a_crash_after_lifting_off_is_judged_by_its_impact(self):
+        flight = self.mission.launch()
+        settle_on(flight, flight.terrain.pad, vy=-.5)
+        flight.y, flight.resting, flight.vy = flight.y + 60, False, -40
+        while flight.status == "flying":
+            flight.step()
+        self.assertEqual(flight.status, "crashed")
+        self.assertGreater(abs(flight.touchdown()[0]), 30)
+        feats = ll.flight_feats(self.mission, flight)
+        self.assertIn("lithobraking", feats)
+        self.assertNotIn("so-close", feats)
+        text = screen(ll.Display(ll.Host(80, 24)).draw(flight, "debrief", mission=self.mission))
+        self.assertNotIn("Vertical -0.5", text)
+
+
 class AchievementTests(unittest.TestCase):
     def test_two_more_in_the_weekend_group(self):
         self.assertEqual(sum(a.group == "WEEKENDS" for a in ll.ACHIEVEMENTS), 4)
