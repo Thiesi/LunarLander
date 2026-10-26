@@ -11,7 +11,7 @@ import argparse
 from bisect import bisect_right
 import codecs
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as clock_time, timedelta, timezone
 from functools import lru_cache
 import json
 import math
@@ -1118,6 +1118,16 @@ class DailyClock:
 
     def day(self) -> str:
         return self.now().astimezone(self.zone).date().isoformat()
+
+    def reset_note(self) -> str:
+        """How long until the node's next midnight, when the dailies change."""
+        now = self.now()
+        midnight = datetime.combine(now.astimezone(self.zone).date() + timedelta(days=1), clock_time(), self.zone)
+        # Aware datetimes in one zone subtract as wall time; UTC counts real minutes across DST.
+        minutes = max(1, math.ceil((midnight.astimezone(timezone.utc) - now.astimezone(timezone.utc))
+                                   .total_seconds() / 60))
+        hours, minutes = divmod(minutes, 60)
+        return "DAILIES RESET IN " + (f"{hours} HR{'S' if hours != 1 else ''} " if hours else "") + f"{minutes} MIN"
 
 
 # The records schema. Version 1 held pilots and their bests; version 2 adds
@@ -2982,7 +2992,9 @@ class Display:
         if program_tab:
             notes = []
         elif daily:
-            notes = textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw)
+            # The reset countdown on a line of its own, unless a long warning needs the wrap.
+            notes = ([clock_note, "Not ranked."] if len(clock_note) <= rw else
+                     textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw))
         elif " / " in note:
             # "LABEL / detail" reads as a heading and its line, not wrapped mid-phrase.
             notes = note.split(" / ", 1)
@@ -2990,8 +3002,16 @@ class Display:
             notes = textwrap.wrap(note, rw)
         for n, line in enumerate(notes[:2]):
             c.text(rx, stats_row + 4 + n, plain(line, rw), 12, PANEL)
-        keys = (f"[{sideways}] Chapter  [S] Simulator  [ENTER] Real flight  [N] New  [B] Board" if program_tab else
-                f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual")
+        if program_tab:
+            keys = f"[{sideways}] Chapter"
+            # Only the keys that work now: the simulator and the real flight for the next mission.
+            if view.ready:
+                chosen = int(mission.key.rsplit("-", 1)[1])
+                if view.next() == chosen:
+                    keys += ("  [S] Simulator" if view.runs_left(chosen) != 0 else "") + "  [ENTER] Real flight"
+                keys += "  [N] New program  [B] Board"
+        else:
+            keys = f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual"
         back = "[P] Pilot record    " + self.back
         if compact:
             c.annotated(lx, y0 + box_h - 3, keys, PANEL, box_w - 6)
@@ -4036,7 +4056,7 @@ def run(host: Host, started: float) -> int:
                     remaining = min(ends) if ends else None
                     frame = display.draw(game.flight, game.mode, remaining, game.slow,
                                          game.mission, game.standings, game.record_note, game.scene_age,
-                                         clock.warning or "DAILY RESET: midnight / " + plain(host.timezone, 30),
+                                         clock.warning or clock.reset_note(),
                                          game.missions, Deck(game.chapter, game.bests,
                                                              game.records is not None and host.ranked, game.award,
                                                              tuple(game.unlocked), game.logbook(), game.kind,

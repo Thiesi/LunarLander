@@ -23,12 +23,24 @@ class DailyTests(unittest.TestCase):
             self.assertEqual(self.clock("Europe/Berlin", instant).day(), "2026-10-25")
         self.assertEqual(self.clock("Europe/Berlin", datetime(2026, 10, 25, 23, 30, tzinfo=timezone.utc)).day(), "2026-10-26")
 
+    def test_the_reset_counts_down_to_node_midnight(self):
+        for zone, instant, note in (
+                ("UTC", datetime(2026, 10, 24, 18, 48, tzinfo=timezone.utc), "DAILIES RESET IN 5 HRS 12 MIN"),
+                ("UTC", datetime(2026, 10, 24, 23, 0, tzinfo=timezone.utc), "DAILIES RESET IN 1 HR 0 MIN"),
+                ("UTC", datetime(2026, 10, 24, 23, 59, 30, tzinfo=timezone.utc), "DAILIES RESET IN 1 MIN"),
+                ("UTC", datetime(2026, 10, 24, 0, 0, tzinfo=timezone.utc), "DAILIES RESET IN 24 HRS 0 MIN"),
+                ("Europe/Berlin", datetime(2026, 10, 24, 18, 48, tzinfo=timezone.utc), "DAILIES RESET IN 3 HRS 12 MIN"),
+                # The night the clocks go back has 25 hours: real time, not wall time.
+                ("Europe/Berlin", datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc), "DAILIES RESET IN 25 HRS 0 MIN")):
+            with self.subTest(zone=zone, instant=instant):
+                self.assertEqual(self.clock(zone, instant).reset_note(), note)
+
     def test_rollover_updates_menu_but_keeps_active_flight(self):
         now = [datetime(2026, 10, 24, 21, 59, tzinfo=timezone.utc)]
         clock = ll.DailyClock("Europe/Berlin", "%d.%m.%Y", now=lambda: now[0])
         self.assertFalse(clock.warning)
         game = ll.Game(clock=clock)
-        game.key("left")  # the chapter tabs wrap round to PROGRAM, then DAILY
+        game.key("left")  # the chapter tabs wrap round to PROGRAM, then DAILIES
         game.key("left")
         self.assertEqual(game.mission.name, "MARIA 24.10.2026")
         game.key("down")  # the same place on the tab survives midnight
