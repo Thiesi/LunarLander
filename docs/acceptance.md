@@ -1,8 +1,19 @@
 # Release acceptance
 
-Target: `v0.5.1`. It is not a claim that every NetBBS transport or target
+Target: `v0.5.2`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.5.2: cosmetic fixes
+
+- The DAILIES tab and splash; [X] Level in the flight director's key line,
+  which fits 70 columns; a countdown to the node's midnight in the Dailies
+  briefing (tested in UTC and Europe/Berlin, including the 25-hour night);
+  the PROGRAM tab lists only the keys that work. All from the maintainer's
+  playtest.
+- 147 tests (unittest); hosted CI with the real NetBBS 7.40.0 runtime on Linux
+  and Windows passed on each change and on the release commit. Saved data is
+  unchanged from v0.5.0 (schema 2).
 
 ## v0.5.1: half blocks for fonts without quarter blocks
 
