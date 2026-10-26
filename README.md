@@ -5,7 +5,7 @@
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, three daily challenges, medals for every
-safe landing, 58 achievements, a career from Cadet to Lunar Ace, and Programs:
+safe landing, 60 achievements, a career from Cadet to Lunar Ace, and Programs:
 practise in the simulator, then fly each mission for real exactly once. Read the
 drift. Watch the fuel. Make both feet count.
 
@@ -36,6 +36,11 @@ itself.
   local midnight: one in the manner of each chapter, from a broad sea to a lean
   frontier run. At weekends the Frontier daily is a **hop**: land on one pad,
   lift off, and land on a second one further along.
+- **History:** five real descents at the game's scale, each with its twist:
+  Apollo 11's alarms and boulder field, Apollo 12's pinpoint landing beside
+  Surveyor 3, Apollo 15 over the Apennines, Apollo 17 into a narrow valley and
+  Chang'e 3's choice of three sites. The debrief says what the crew did. They
+  earn medals and bests but don't count toward rank.
 - **Medals and ranks:** gold, silver and bronze for every safe landing, and a
   career from Cadet to Lunar Ace, with a medal ceremony and promotion fireworks.
 - **Programs:** a season's five to eight missions, the same for every pilot on
@@ -56,8 +61,8 @@ itself.
 - **Grand Tour:** **[T]** flies all fifteen ranked missions in order, in one
   sitting: a crash means flying that mission again, the clock counts flight time
   only, and the node's best tours have their own board.
-- **Achievements:** 58 of them, from milestones and precision touchdowns to
-  close calls, hops, instrument landings, the fleet, the Grand Tour, career feats, Programs and ten hidden ones. The **Pilot
+- **Achievements:** 60 of them, from milestones and precision touchdowns to
+  close calls, hops, history, instrument landings, the fleet, the Grand Tour, career feats, Programs and ten hidden ones. The **Pilot
   Record** ([P] in the flight director) shows the career, flight totals and
   personal records on one tab and the achievements, with how many of the node's
   pilots hold each, on the other.

@@ -575,6 +575,8 @@ class Flight:
     # After lift-off, the pad's height until the feet are 2 m clear of it:
     # upright until then, and a soft touch back down stands it on the pad again.
     liftoff: float | None = None
+    # Other smooth sites; a landing on any is a landing on the pad.
+    sites: tuple = ()
     # Physics steps flown, and (step, throttle, angle) whenever the controls
     # change: with the mission, all a ghost needs to fly the run again.
     steps: int = field(default=0, repr=False, compare=False)
@@ -615,6 +617,9 @@ class Flight:
             self.y, self.vx, self.vy, self.angle = self.liftoff + 3.01, 0.0, 0.0, 0.0
             self.resting, self.liftoff = True, None
             return True
+        chosen = next((site for site in self.sites if all(site.left <= x <= site.right for x, _ in feet)), None)
+        if chosen is not None:
+            self.terrain, pad = replace(self.terrain, pad=chosen), chosen
         if not all(pad.left <= x <= pad.right for x, _ in feet):
             reason = "Terrain strike: put both landing feet inside the lit pad."
         elif abs(self.angle) > 10:
@@ -721,6 +726,10 @@ class Mission:
     # A hop: the second pad's centre, this far from the first (0: no hop).
     hop: float = 0.0
     craft: str = "lm"
+    # Other smooth sites, by centre, any of which counts as the pad (Chang'e 3).
+    sites: tuple = ()
+    # A landmark on the ground: (x, label), such as Surveyor 3 beside Apollo 12.
+    marker: tuple | None = None
 
     def launch(self) -> Flight:
         if self.difficulty == 0:
@@ -728,16 +737,17 @@ class Mission:
         rng = random.Random(self.seed)
         pad = Pad(self.center - self.width / 2, self.center + self.width / 2, 35, self.name)
         pads = (pad, Pad(pad.left + self.hop, pad.right + self.hop, 35, self.name)) if self.hop else (pad,)
+        sites = tuple(Pad(x - self.width / 2, x + self.width / 2, 35, self.name) for x in self.sites)
         points = [(float(x), float(rng.randint(*self.relief))) for x in range(0, 1001, 80)
-                  if all(x < p.left - 30 or x > p.right + 30 for p in pads)]
-        for p in pads:
+                  if all(x < p.left - 30 or x > p.right + 30 for p in pads + sites)]
+        for p in pads + sites:
             points.extend(((p.left, p.height), (p.right, p.height)))
         points.append((1000.0, 80.0))
         _, dry_mass, thrust, _, tilt_step, lag, _ = CRAFT[self.craft]
         return Flight(Terrain(tuple(sorted(points)), pad), x=self.center + self.offset,
                       y=self.altitude, vx=self.drift, vy=self.sink, fuel=self.fuel, initial_fuel=self.fuel,
                       gravity=self.gravity, pads=pads[1:], dry_mass=dry_mass, thrust=thrust,
-                      tilt_step=tilt_step, lag=lag)
+                      tilt_step=tilt_step, lag=lag, sites=sites)
 
 
 # The day's three challenges, one in the manner of each chapter. Every setting
@@ -857,6 +867,39 @@ def program_missions(season: str) -> tuple[Mission, ...]:
     return tuple(flights)
 
 
+# Historic descents: real landings at our scale, each with its twist, and
+# what the crew did in the debrief. The facts are from NASA and the Planetary
+# Society (sources in Thiesi/LunarLander#61); disputed figures stay vague.
+HISTORIC = (
+    Mission("apollo11", "APOLLO 11", "1969. Alarms, a boulder field ahead: fly past it on little fuel.", 3, 740, 55, 300, -300, 9, 64, 1969, -7, (40, 125)),
+    Mission("apollo12", "APOLLO 12", "1969. Pinpoint: Intrepid landed about 160 m from Surveyor 3.", 3, 420, 50, 280, 150, -7, 74, 1119,
+            relief=(45, 110), marker=(260, "SURVEYOR 3")),
+    Mission("apollo15", "APOLLO 15", "1971. Over the Apennines to Hadley, where Falcon came to rest tilted.", 4, 560, 45, 330, -140, 8, 70, 730, -9, (70, 170)),
+    Mission("apollo17", "APOLLO 17", "1972. Into Taurus-Littrow, a narrow valley between massifs.", 4, 500, 45, 340, 60, -3, 72, 1211, -8, (140, 190)),
+    Mission("change3", "CHANG'E 3", "2013. Three smooth sites: hover, look and pick one, as Chang'e 3 did.", 3, 300, 45, 260, 120, -5, 76, 1214, relief=(50, 130),
+            sites=(500, 680)),
+)
+
+
+def history_line(mission: Mission, flight: Flight) -> str:
+    """What the real crew did, beside what this pilot did, for the debrief."""
+    key = mission.key.split("@", 1)[0]
+    if flight.status != "landed":
+        return ""
+    if key == "apollo11":
+        left = hover_seconds(flight.fuel, flight.gravity, flight.dry_mass, flight.thrust)
+        return f"Eagle landed after Houston's \"30 seconds\"; you had {left:.0f} s."
+    if key == "apollo12" and mission.marker:
+        return f"Intrepid stood about 160 m from Surveyor 3; you, {abs(flight.x - mission.marker[0]):.0f} m."
+    if key == "apollo15":
+        return f"Falcon came to rest tilted about 10 degrees; you, {abs(flight.angle):.0f}."
+    if key == "apollo17":
+        return "Challenger landed here in December 1972, the last of Apollo."
+    if key == "change3":
+        return "Chang'e 3 chose its own spot from a 100 m hover."
+    return ""
+
+
 def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mission, ...]:
     day = day or datetime.now(timezone.utc).date().isoformat()
     maria, highlands, frontier = daily_missions(day, date_format)
@@ -888,6 +931,7 @@ def missions(day: str | None = None, date_format: str = "%Y-%m-%d") -> tuple[Mis
                 sink=-12, relief=(45, 130)),
         highlands,
         frontier,
+        *HISTORIC,
     )
 
 
@@ -906,6 +950,7 @@ CHAPTERS = (
     Chapter("maria", "MARIA", ("training", "tranquility", "serenitatis", "copernicus", "imbrium", "crisium")),
     Chapter("highlands", "HIGHLANDS", ("ridgetop", "descartes", "hadley", "needle", "apennine")),
     Chapter("frontier", "FRONTIER", ("farside", "polar", "tsiolkovsky", "shackleton", "aitken")),
+    Chapter("history", "HISTORY", ("apollo11", "apollo12", "apollo15", "apollo17", "change3"), ranked=False),
     Chapter("daily", "DAILIES", ("daily-maria", "daily-highlands", "daily-frontier"), ranked=False),
     Chapter("program", "PROGRAM", tuple(f"program-{n}" for n in range(1, 9)), ranked=False),
 )
@@ -1077,6 +1122,9 @@ _CATALOGUE = (
     ("INSTRUMENTS", (
         ("ifr", "Blind Faith", "BRONZE", "Land on instruments alone"),
         ("ifr-gold", "Cross-Pointer", "SILVER", "Earn gold on instruments alone"))),
+    ("HISTORY", (
+        ("history", "History Buff", "SILVER", "Land every historic descent"),
+        ("eagle", "The Eagle Has Landed", "GOLD", "Earn gold on Apollo 11"))),
     ("FLEET", (
         ("craft-surveyor", "Light Touch", "SILVER", "Earn gold in the Surveyor"),
         ("craft-altair", "Heavy Lifter", "SILVER", "Earn gold in the Altair"))),
@@ -1207,6 +1255,10 @@ def career_feats(bests: dict[str, int], catalog: tuple[Mission, ...]) -> set[str
             got.add(chapter.key + "-gold")
     if career(bests, catalog).next_rank is None:
         got.add("ace")
+    if all(medal(m, bests.get(m.key, 0)) for m in HISTORIC):
+        got.add("history")
+    if medal(HISTORIC[0], bests.get(HISTORIC[0].key, 0)) == "GOLD":
+        got.add("eagle")
     days: dict[str, set] = {}
     for key, score in bests.items():
         match = _DAILY_KEY.fullmatch(key)
@@ -3318,6 +3370,10 @@ class Display:
                 trace.pop()
             if len(trace) >= 2:
                 lines[trace_at:trace_at] = trace
+            # What the real crew did, on a historic descent, where the card has room.
+            told = history_line(mission, flight)
+            if told and len(lines) < c.height - 4:
+                lines.insert(trace_at, plain(told, 60))
             # Against the ghost: time and fuel, where the card has room.
             ghost = self.deck.ghost.flight if self.deck.ghost is not None else None
             if landed and ghost is not None and ghost.status == "landed" and len(lines) < c.height - 4:
@@ -3838,6 +3894,22 @@ class Display:
         pad_label_row = view_y + (pad_row + 2) // 2
         if view_y <= pad_label_row < view_y + view_h:
             c.text(max(0, (pad_left + pad_right) // (2 * across) - 1), pad_label_row, "PAD", 6, None)
+        for site in flight.sites:
+            # Other smooth sites: unlit, but any of them will do.
+            middle = round(((site.left + site.right) / 2 - left) / (metres / across))
+            if 0 <= middle < px_w and view_y <= pad_label_row < view_y + view_h:
+                c.text(max(0, middle // across - 2), pad_label_row, "SITE", 9, None)
+        if mission.marker is not None:
+            mx = round((mission.marker[0] - left) / (metres / across))
+            marker_row = view_y + (row_of(ground.height(mission.marker[0])) - 2) // 2
+            if 0 <= mx < px_w and view_y <= marker_row < view_y + view_h:
+                c.text(max(0, mx // across - len(mission.marker[1]) // 2), marker_row, mission.marker[1], 12, None)
+        if mission.key.split("@", 1)[0] == "apollo11" and flight.status == "flying" \
+                and any(start <= flight.elapsed < start + 3 for start in (8, 21, 30)):
+            alarm = "PROGRAM ALARM 1202" if flight.elapsed < 21 or flight.elapsed >= 30 else "PROGRAM ALARM 1201"
+            if self.frame % 6 < 4:
+                c.text(max(0, (c.width - len(alarm) - 4) // 2), view_y + 3, f"  {alarm}  ", (16, 12, 22),
+                       (255, 186, 60))
         for n, ahead in enumerate(flight.pads, 2):
             # A hop's pads to come: named by their order, not yet lit.
             middle = round(((ahead.left + ahead.right) / 2 - left) / (metres / across))
