@@ -34,7 +34,7 @@ Missions are grouped in chapters, all open from the start:
   Apennine Front. Rough terrain and narrower pads.
 - **Frontier**: Far Side, Polar Approach, Tsiolkovsky, Shackleton Rim and Aitken
   Basin. Fast entries, strong drift and lean tanks; difficulty up to five.
-- **Daily**: the day's three challenges, one in the manner of each chapter.
+- **Dailies**: the day's three challenges, one in the manner of each chapter.
   Every setting of a daily (pad width, start, drift, fuel, sink and terrain) is
   drawn from the span of its chapter's own missions, so the Maria daily is as
   gentle as the Maria missions, the Frontier daily as lean as the Frontier ones. The harder

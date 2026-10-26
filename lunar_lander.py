@@ -803,7 +803,7 @@ CHAPTERS = (
     Chapter("maria", "MARIA", ("training", "tranquility", "serenitatis", "copernicus", "imbrium", "crisium")),
     Chapter("highlands", "HIGHLANDS", ("ridgetop", "descartes", "hadley", "needle", "apennine")),
     Chapter("frontier", "FRONTIER", ("farside", "polar", "tsiolkovsky", "shackleton", "aitken")),
-    Chapter("daily", "DAILY", ("daily-maria", "daily-highlands", "daily-frontier"), ranked=False),
+    Chapter("daily", "DAILIES", ("daily-maria", "daily-highlands", "daily-frontier"), ranked=False),
     Chapter("program", "PROGRAM", tuple(f"program-{n}" for n in range(1, 9)), ranked=False),
 )
 
@@ -2606,7 +2606,7 @@ class Display:
             if t >= 3.5:
                 chip = [("PILOT ", (179, 155, 125)), (self.host.handle, (232, 240, 255)),
                         ("  ·  " if unicode else "  -  ", (70, 82, 120)),
-                        (f"{career({}, missions()).total} MISSIONS + DAILY", (179, 155, 125))]
+                        (f"{career({}, missions()).total} MISSIONS + DAILIES", (179, 155, 125))]
                 texts.append((text_row + 2, mx, chip))
             if t >= SCENE_SECONDS["splash"]:
                 texts.append((rows - 1, max(0, cols - len(SPLASH_PROMPT) - 2), [(SPLASH_PROMPT, rgb(5))]))
@@ -2939,7 +2939,7 @@ class Display:
             if chosen:
                 c.fill(lx - 1, row, 33, 1, bg)
                 c.text(lx - 1, row, "►" if unicode else ">", 5, bg)
-            # The Daily tab is today's: its list names each daily by its manner, the briefing adds the date.
+            # The Dailies tab is today's: its list names each daily by its manner, the briefing adds the date.
             label = entry.name.split(" ", 1)[0] if entry.key.startswith("daily-") else entry.name
             c.rich(lx, row, [("[", 9), (str(n + 1), 5), ("] ", 9),
                              (plain(label, 19), (255, 240, 200) if chosen else 7)], bg)
@@ -2999,7 +2999,7 @@ class Display:
             return
         c.text(x0 + 1, y0 + 14, rule, EDGE, PANEL)
         c.annotated(lx, y0 + 15, keys, PANEL, box_w - 6)
-        c.annotated(lx, y0 + 16, f"In flight: [W/S {updown}] Thrust  [A/D {sideways}] Tilt  [0-9] Power  [SPACE] Cut",
+        c.annotated(lx, y0 + 16, f"In flight: [W/S {updown} 0-9] Thrust  [A/D {sideways}] Tilt  [X] Level  [SPACE] Cut",
                     PANEL, box_w - 6)
         c.annotated(lx, y0 + 17, "Touchdown: |V|<=3 m/s  |H|<=2 m/s  |tilt|<=10", PANEL, box_w - 6)
         c.annotated(lx, y0 + 18, back, PANEL, box_w - 6)
