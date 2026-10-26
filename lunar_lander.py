@@ -892,6 +892,17 @@ CHAPTERS = (
 )
 
 
+def tour_missions(catalog: tuple[Mission, ...]) -> tuple[Mission, ...]:
+    """The Grand Tour: every ranked mission, in chapter order."""
+    return tuple(mission for chapter in CHAPTERS if chapter.ranked
+                 for mission in chapter_missions(chapter, catalog) if mission.difficulty)
+
+
+def clock_text(seconds: float) -> str:
+    minutes, seconds = divmod(round(seconds), 60)
+    return f"{minutes}:{seconds:02d}"
+
+
 def chapter_missions(chapter: Chapter, catalog: tuple[Mission, ...]) -> tuple[Mission, ...]:
     by_key = {mission.key: mission for mission in catalog}
     for mission in catalog:
@@ -1012,6 +1023,9 @@ _CATALOGUE = (
     ("HOPS", (
         ("hop", "Grasshopper", "BRONZE", "Land both pads of a hop"),
         ("hop-gold", "Kangaroo", "SILVER", "Earn gold on a hop"))),
+    ("GRAND TOUR", (
+        ("grand-tour", "Grand Tour", "SILVER", "Land every ranked mission in one tour"),
+        ("grand-slam", "Grand Slam", "GOLD", "Gold on every mission of one tour"))),
     ("PROGRAMS", (
         ("program-cadet", "Graduate", "BRONZE", "Complete a Cadet program"),
         ("program-astronaut", "Astronaut", "SILVER", "Complete an Astronaut program"),
@@ -1332,6 +1346,55 @@ class Records:
                                                     (host.node,)):
             pilots.setdefault(user, {})[mission] = score
         return pilots
+
+    TOUR_FIELDS = ("id", "landed", "retries", "seconds", "score", "status")
+
+    def tour(self, host: Host, tour: int | None = None) -> dict | None:
+        """A tour by id, or this pilot's open one."""
+        query = ("SELECT id, landed, retries, seconds, score, status FROM tours WHERE id=?", (tour,)) if tour else \
+            ("SELECT id, landed, retries, seconds, score, status FROM tours WHERE node=? AND user=? "
+             "AND status='active' ORDER BY id DESC LIMIT 1", (host.node, host.user))
+        row = self.db.execute(*query).fetchone()
+        return dict(zip(self.TOUR_FIELDS, row)) if row else None
+
+    def tour_start(self, host: Host) -> dict:
+        """A new tour; an open one ends unfinished."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self.identify(host)
+            now = time.time_ns()
+            self.db.execute("UPDATE tours SET status='unfinished', ended=? WHERE node=? AND user=? AND status='active'",
+                            (now, host.node, host.user))
+            tour = self.db.execute("INSERT INTO tours (node, user, started, ended, status, landed, retries, seconds, "
+                                   "score) VALUES (?,?,?,NULL,'active',0,0,0,0)", (host.node, host.user, now)).lastrowid
+            self.db.execute("COMMIT")
+        except sqlite3.Error:
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
+            raise
+        return self.tour(host, tour)
+
+    def tour_flight(self, tour: int, landed: bool, seconds: float, score: int, count: int) -> dict:
+        """Count a tour mission's flight: a landing moves the tour on, a crash is a retry."""
+        self.db.execute("UPDATE tours SET landed=landed+?, retries=retries+?, seconds=seconds+?, score=score+? "
+                        "WHERE id=? AND status='active'", (int(landed), int(not landed), seconds, score, tour))
+        self.db.execute("UPDATE tours SET status='complete', ended=? WHERE id=? AND landed>=?",
+                        (time.time_ns(), tour, count))
+        return self.tour(Host(), tour)
+
+    def tour_close(self, host: Host):
+        """A tour is flown in one sitting: one left open by an earlier visit ends unfinished."""
+        if host.ranked:
+            self.db.execute("UPDATE tours SET status='unfinished', ended=? WHERE node=? AND user=? AND status='active'",
+                            (time.time_ns(), host.node, host.user))
+
+    def tour_board(self, host: Host) -> list[tuple]:
+        """Each pilot's best complete tour: handle, points, seconds, retries and user id."""
+        return self.db.execute(
+            "SELECT handle, score, seconds, retries, user FROM (SELECT p.handle, t.score, t.seconds, t.retries, t.user, "
+            "ROW_NUMBER() OVER (PARTITION BY t.user ORDER BY t.score DESC, t.seconds) AS n FROM tours t "
+            "JOIN pilots p USING(node,user) WHERE t.node=? AND t.status='complete') WHERE n=1 "
+            "ORDER BY score DESC, seconds LIMIT 10", (host.node,)).fetchall()
 
     def rivals(self, host: Host, since: int) -> dict[str, tuple[str, int, int]]:
         """Missions where another pilot's best passed this pilot's since `since`
@@ -2643,6 +2706,7 @@ class Deck:
     ghost: Ghost | None = None
     ghost_choice: str = ""
     rivals: dict = field(default_factory=dict)
+    tour: dict | None = None
 
 
 def full_card(height: int) -> bool:
@@ -3066,8 +3130,11 @@ class Display:
             retry = {"real": "", "sim": "[R] Simulator again    "}.get(self.deck.kind, "[R] Retry    ")
             if self.deck.kind == "sim" and self.deck.program and                     self.deck.program.runs_left(int(mission.key.rsplit("-", 1)[1])) == 0:
                 retry = ""
-            lines += [record_note or "Training flight / unranked", "",
-                      retry + ("[M] Program" if self.deck.kind else "[M] Mission briefing"), self.back]
+            keys = retry + ("[M] Program" if self.deck.kind else "[M] Mission briefing")
+            tour = self.deck.tour
+            if landed and tour and tour["status"] == "active" and tour["next"]:
+                keys = f"[ENTER] Tour {tour['landed'] + 1}/{tour['count']}: {tour['next']}    [M] Briefing"
+            lines += [record_note or "Training flight / unranked", "", keys, self.back]
             # The descent trace, where the card has room for it (not at 80x24 after a medal).
             trace = descent_trace(flight, 55, unicode and self.host.charset in (None, "utf-8"))
             while trace and len(lines) + len(trace) > c.height - 4:
@@ -3099,6 +3166,30 @@ class Display:
                      "The start differs a little from the simulator.",
                      "Leaving or losing the connection counts as a crash.", "",
                      "[Y] Go for landing     [N] Back"]
+        elif mode == "tour":
+            tour = self.deck.tour
+            count = len(tour_missions(self.catalog))
+            lines = ["GRAND TOUR", "", f"All {count} ranked missions in chapter order, in one sitting.",
+                     "Crash and you fly that mission again; the clock counts", "flight time only. Leaving ends the tour.", ""]
+            if tour and tour["status"] == "active":
+                lines += [f"Under way: {tour['landed']} of {count} landed, {tour['score']:,} pts,",
+                          f"{clock_text(tour['seconds'])} flying, {tour['retries']} retries", "",
+                          f"[ENTER] Continue: {tour['next']}"]
+            else:
+                if tour and tour["status"] == "complete":
+                    lines += [f"Complete: {tour['score']:,} pts in {clock_text(tour['seconds'])}", ""]
+                lines.append("[ENTER] Start a tour")
+            lines += ["[B] Tour board    [ESC] Back"]
+        elif mode == "tour-board":
+            lines = ["GRAND TOUR BOARD", ""]
+            board = (self.deck.tour or {}).get("board", ())
+            for i, (name, score, seconds, retries, user) in enumerate(board, 1):
+                if self.host.ranked and user == self.host.user:
+                    mine = len(lines)
+                lines.append(f"{i:2}. {plain(name, 22):22} {score:7,} pts  {clock_text(seconds):>6}  {retries} retries")
+            if not board:
+                lines.append("No tours completed on this node yet.")
+            lines += ["", "[B] or [ESC] Back"]
         elif mode == "program-board":
             view = self.deck.program or ProgramView()
             preset = view.board_preset
@@ -3277,7 +3368,7 @@ class Display:
                 keys += "  [N] New program  [B] Board"
         else:
             keys = f"[{updown}] Mission  [{sideways}] Chapter  [ENTER] Launch  [B] Leaders  [?] Manual"
-        back = "[P] Pilot record    " + self.back
+        back = ("[P] Pilot record  [T] Grand Tour  " if deck.saved else "[P] Pilot record    ") + self.back
         if compact:
             c.annotated(lx, y0 + box_h - 3, keys, PANEL, box_w - 6)
             c.annotated(lx, y0 + box_h - 2, back, PANEL, box_w - 6)
@@ -3838,6 +3929,15 @@ class Game:
             except sqlite3.Error as exc:
                 print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
         self.grant(career_feats(self.bests, self.missions))
+        # The Grand Tour under way this visit (one left open by an earlier visit ends unfinished).
+        self.tour: dict | None = None
+        self.tour_golds = 0
+        self.tour_standings: list = []
+        if self.records is not None and self.host.ranked:
+            try:
+                self.records.tour_close(self.host)
+            except sqlite3.Error as exc:
+                print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
         # Rivals: who passed this pilot's bests since the last visit, by mission.
         self.rivals: dict[str, tuple[str, int, int]] = {}
         if self.records is not None and self.host.ranked:
@@ -3962,6 +4062,51 @@ class Game:
     def career(self) -> Career:
         return career(self.bests, self.missions)
 
+    def tour_next(self) -> Mission | None:
+        """The tour mission up next, if a tour is under way."""
+        tours = tour_missions(self.missions)
+        if self.tour is None or self.tour["status"] != "active" or self.tour["landed"] >= len(tours):
+            return None
+        return tours[self.tour["landed"]]
+
+    def tour_view(self) -> dict | None:
+        if self.tour is None:
+            return None
+        upcoming = self.tour_next()
+        return {**self.tour, "count": len(tour_missions(self.missions)), "next": upcoming.name if upcoming else "",
+                "board": tuple(self.tour_standings)}
+
+    def fly_tour(self):
+        """Launch the tour's next mission, choosing it in the flight director too."""
+        upcoming = self.tour_next()
+        for n, chapter in enumerate(CHAPTERS):
+            shelf = chapter_missions(chapter, self.missions)
+            if upcoming in shelf:
+                self.chapter, self.cursor[n] = n, shelf.index(upcoming)
+        self.select()
+        self.launch()
+
+    def tour_flight(self) -> set[str]:
+        """Count a finished flight toward the tour if it was the tour's mission;
+        the achievements a completed tour earns."""
+        upcoming = self.tour_next()
+        if upcoming is None or upcoming.key != self.mission.key:
+            return set()
+        landed = self.flight.status == "landed"
+        score = self.flight.score(self.mission.difficulty) if landed else 0
+        self.tour_golds += landed and medal(self.mission, score) == "GOLD"
+        try:
+            self.tour = self.records.tour_flight(self.tour["id"], landed, self.flight.elapsed, score,
+                                                 len(tour_missions(self.missions)))
+        except sqlite3.Error as exc:
+            print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+            return set()
+        if self.tour["status"] != "complete":
+            return set()
+        self.record_note = (f"GRAND TOUR COMPLETE / {self.tour['score']:,} pts in "
+                            f"{clock_text(self.tour['seconds'])}, {self.tour['retries']} retries")
+        return {"grand-tour"} | ({"grand-slam"} if self.tour_golds == self.tour["landed"] else set())
+
     def rival(self, key: str | None = None) -> tuple[str, int, int] | None:
         """The pilot who passed this one on a mission, until this one passes them back."""
         key = key or self.mission.key
@@ -4042,14 +4187,14 @@ class Game:
         else:
             self.counters = apply_log(self.counters, added, lowest, highest)
 
-    def settle(self, outcome: str) -> list[str]:
+    def settle(self, outcome: str, extra: set[str] = frozenset()) -> list[str]:
         """Count a finished flight ("landed", "crashed" or "aborted") and award
         what it earned; announce the notable ones. Returns the new achievements."""
         self.count(*flight_log(self.mission, self.flight, outcome))
         self.unlocked = []
         if self.mission.difficulty:
             self.unlocked = self.grant(flight_feats(self.mission, self.flight) | counter_feats(self.counters)
-                                       | career_feats(self.bests, self.missions))
+                                       | career_feats(self.bests, self.missions) | extra)
             if self.announcer is not None:
                 self.announcer.achievements(self.unlocked)
         return self.unlocked
@@ -4256,6 +4401,36 @@ class Game:
         if self.mode in ("flying", "paused") and key == "p":
             self.mode = "paused" if self.mode == "flying" else "flying"
             return True
+        if self.mode == "menu" and key == "t" and self.records is not None and self.host.ranked:
+            self.mode = "tour"
+            return True
+        if self.mode == "tour":
+            if key == "enter":
+                try:
+                    if self.tour is None or self.tour["status"] != "active":
+                        self.tour, self.tour_golds = self.records.tour_start(self.host), 0
+                except sqlite3.Error as exc:
+                    print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+                    return False
+                self.fly_tour()
+            elif key == "b":
+                try:
+                    self.tour_standings = self.records.tour_board(self.host)
+                except sqlite3.Error as exc:
+                    print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+                self.mode = "tour-board"
+            elif key in ("escape", "t", "m"):
+                self.mode = "menu"
+            else:
+                return False
+            return True
+        if self.mode == "tour-board" and key in ("b", "escape"):
+            self.mode = "tour"
+            return True
+        if self.mode == "debrief" and key == "enter" and self.tour_next() is not None \
+                and self.flight.status == "landed":
+            self.fly_tour()
+            return True
         if self.mode == "debrief" and key in ("r", "m"):
             if key == "r" and self.kind == "real":
                 return False
@@ -4327,7 +4502,7 @@ class Game:
                     self.queue = ["medal"] * bool(self.award.medal) + ["promotion"] * bool(self.award.promoted)
                     if saved and self.announcer is not None:
                         self.announcer.landed(self.award, self.missions)
-                self.settle(self.flight.status)
+                self.settle(self.flight.status, self.tour_flight())
                 self.mode = ("landing" if self.flight.status == "landed" else "crash") if self.scenes else "debrief"
                 if not self.scenes:
                     self.queue = []
@@ -4471,13 +4646,13 @@ def run(host: Host, started: float) -> int:
                                                              "replay" if replay else game.kind,
                                                              game.program_view(), replay or game.ghost,
                                                              game.ghost_choice() if game.mode == "menu" else "",
-                                                             game.live_rivals()))
+                                                             game.live_rivals(), game.tour_view()))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
                     # splash's hold only twinkles, so idling costs little CPU.
                     if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm", "record",
-                                     "presets", "commit", "program-board"):
+                                     "presets", "commit", "program-board", "tour", "tour-board"):
                         next_frame = now + 1
                     elif game.mode == "splash" and game.scene_age >= SCENE_SECONDS["splash"]:
                         next_frame = now + .25
