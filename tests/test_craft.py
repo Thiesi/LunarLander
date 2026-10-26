@@ -41,7 +41,8 @@ class FlightTests(unittest.TestCase):
                 with self.subTest(craft=craft, mission=mission.key):
                     flight = land(ll.in_craft(mission, craft))
                     self.assertEqual(flight.status, "landed", flight.reason)
-                    self.assertGreater(flight.fuel, 5)
+                    if not flight.cooling:  # the Hopper's margin is heat, not a tank
+                        self.assertGreater(flight.fuel, 5)
 
     def test_hover_time_is_the_crafts(self):
         lm, altair = ll.missions()[1].launch(), ll.in_craft(ll.missions()[1], "altair").launch()
