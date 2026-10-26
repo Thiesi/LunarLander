@@ -67,6 +67,16 @@ class DailyTests(unittest.TestCase):
         self.assertEqual((a.x, a.y, a.fuel, a.vx, a.vy),
                          (formatted.x, formatted.y, formatted.fuel, formatted.vx, formatted.vy))
 
+    def test_door_ll_today_pins_the_date_and_ignores_anything_else(self):
+        from datetime import datetime, timezone
+        instant = datetime(2026, 10, 26, 15, 30, tzinfo=timezone.utc)
+        pinned = ll.DailyClock("UTC", "%Y-%m-%d", now=lambda: instant, today="2026-10-31")
+        self.assertEqual(pinned.day(), "2026-10-31")
+        self.assertTrue(ll.daily_missions(pinned.day())[0].ascent)  # a Saturday's specials
+        self.assertEqual(pinned.reset_note(), "DAILIES RESET IN 8 HRS 30 MIN")
+        for bad in ("2026-02-30", "31.10.2026", "", "2026-1-5", "tomorrow", None):
+            self.assertEqual(ll.DailyClock("UTC", now=lambda: instant, today=bad).day(), "2026-10-26")
+
     def test_missing_zone_data_and_invalid_format_are_visible(self):
         clock = ll.DailyClock("missing/zone", "%n%Q")
         self.assertIn("UTC", clock.warning)

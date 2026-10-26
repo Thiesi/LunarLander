@@ -1414,9 +1414,18 @@ def daily_format(host: Host) -> str:
 
 
 class DailyClock:
-    """Calendar boundaries use the host's IANA zone, never a fixed UTC offset."""
-    def __init__(self, zone: str = "UTC", date_format: str = "%Y-%m-%d", now=None):
+    """Calendar boundaries use the host's IANA zone, never a fixed UTC offset.
+    `today` (DOOR_LL_TODAY, a testing and preview aid) pins the game's date:
+    the dailies and weekend specials follow it (and are filed under it), the
+    countdown keeps the time of day, and records keep real timestamps. A value that is not a YYYY-MM-DD date
+    is ignored."""
+    def __init__(self, zone: str = "UTC", date_format: str = "%Y-%m-%d", now=None, today: str | None = None):
         self.warning = ""
+        try:
+            self.today = date.fromisoformat(today).isoformat() if re.fullmatch(r"\d{4}-\d\d-\d\d", today or "") \
+                else None
+        except ValueError:
+            self.today = None
         try:
             self.zone = timezone.utc if zone == "UTC" else ZoneInfo(zone)
         except (ValueError, ZoneInfoNotFoundError):
@@ -1429,7 +1438,7 @@ class DailyClock:
         self.now = now or (lambda: datetime.now(timezone.utc))
 
     def day(self) -> str:
-        return self.now().astimezone(self.zone).date().isoformat()
+        return self.today or self.now().astimezone(self.zone).date().isoformat()
 
     def reset_note(self) -> str:
         """How long until the node's next midnight, when the dailies change."""
@@ -5140,7 +5149,7 @@ def run(host: Host, started: float) -> int:
             records = Records(root / "pilots.db")
         except DoorError as exc:
             print("Lunar Lander: " + plain(str(exc), 200), file=sys.stderr)
-    clock = DailyClock(host.timezone, daily_format(host))
+    clock = DailyClock(host.timezone, daily_format(host), today=os.environ.get("DOOR_LL_TODAY"))
     if clock.warning:
         print("Lunar Lander: " + clock.warning, file=sys.stderr)
     game = Game(host, records, clock=clock, scenes=os.environ.get("DOOR_LL_SCENES") != "0",
