@@ -52,6 +52,9 @@ itself.
 - **Flight:** deterministic lunar physics; a landing needs both feet on the pad,
   a vertical speed of 3 m/s or less, a drift of 2 m/s or less and a tilt of 10°
   or less. Fuel alerts appear over the view at 30 and 10 seconds of hover fuel.
+- **Radio:** CAPCOM calls the fuel down as each alert begins, reads out height,
+  sink and drift every few seconds below 60 m, and has a word for how it ended
+  in the debrief, a first gold on a mission naming its base.
 - **Presentation:** scenery in quadrant blocks, two pixels across each cell, with
   stars, a distant Earth and parallax ranges; a title splash with a rotating
   tagline; and skippable ignition, touchdown and crash scenes. Truecolor, 256-
