@@ -38,7 +38,12 @@ Missions are grouped in chapters, all open from the start:
   Every setting of a daily (pad width, start, drift, fuel, sink and terrain) is
   drawn from the span of its chapter's own missions, so the Maria daily is as
   gentle as the Maria missions, the Frontier daily as lean as the Frontier ones. The harder
-  half of a chapter's span scores its higher difficulty.
+  half of a chapter's span scores its higher difficulty. On Saturdays and
+  Sundays the Frontier daily is a hop: after a safe touchdown on the first pad
+  the craft stands upright on it and the second pad, 220 to 320 m along, is lit.
+  Thrust lifts it off (it stays upright until 2 m clear, and settling back
+  softly stands it on the pad again). A hop carries 40 kg more fuel, flies over
+  ground no higher than 110 m, and scores its worse touchdown.
 
 Every safe landing on a ranked mission earns a medal from the pilot's best score
 there, per point of the mission's difficulty: bronze for any safe landing, silver
@@ -50,8 +55,8 @@ releases keep what they earned and no migration is needed. The dailies show
 today's medals but do not count toward rank. Callers without a NetBBS
 identity earn medals for the session only.
 
-Ranked flights also count toward 50 achievements: milestones (landings, time in
-the air, crashes, simulator time), precision and close-call landings, nine
+Ranked flights also count toward 52 achievements: milestones (landings, time in
+the air, crashes, simulator time), precision and close-call landings, hops, nine
 hidden spectacular crashes, completed Programs, and career feats from bests (chapters landed and gold, the top rank,
 all three dailies in a day, daily streaks). Achievements that bests already earn
 are awarded quietly the first time a pilot launches this release. The debrief

@@ -30,10 +30,16 @@ class DailyTests(unittest.TestCase):
                 with self.subTest(day=day, mission=mission.key):
                     inside = lambda value, span: min(span) <= value <= max(span)
                     self.assertIn(mission.difficulty, difficulties)
+                    # A weekend hop carries fuel for its second leg over lower ground.
+                    extra = ll.HOP_FUEL if mission.hop else 0
                     for value, span in ((mission.width, widths), (abs(mission.drift), drifts),
-                                        (mission.fuel, fuels), (mission.sink, sinks),
-                                        (mission.relief[0], floors), (mission.relief[1], ceilings)):
+                                        (mission.fuel - extra, fuels), (mission.sink, sinks)):
                         self.assertTrue(inside(value, span), (value, span))
+                    if mission.hop:
+                        self.assertLessEqual(mission.relief[1], ll.HOP_CEILING)
+                        self.assertLess(mission.relief[0], mission.relief[1])
+                    else:
+                        self.assertTrue(inside(mission.relief[0], floors) and inside(mission.relief[1], ceilings))
                     self.assertLessEqual(abs(mission.offset), max(offsets))
                     self.assertTrue(inside(mission.altitude, (min(altitudes), max(max(altitudes), mission.relief[1] + 120))))
                     # Fair approach: inside the field, clear of the ridges, drifting toward the pad.
@@ -56,7 +62,7 @@ class DailyTests(unittest.TestCase):
                 with self.subTest(day=day, mission=mission.key):
                     flight = land(mission)
                     self.assertEqual(flight.status, "landed", flight.reason)
-                    self.assertGreater(flight.fuel, 20)
+                    self.assertGreater(flight.fuel, 15 if mission.hop else 20)
 
     def test_the_same_day_everywhere(self):
         code = "import lunar_lander as l; print([repr(m.launch()) for m in l.daily_missions('2026-10-24')])"
