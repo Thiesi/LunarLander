@@ -56,6 +56,9 @@ itself.
 - **Radio:** CAPCOM calls the fuel down as each alert begins, reads out height,
   sink and drift every few seconds below 60 m, and has a word for how it ended
   in the debrief, a first gold on a mission naming its base.
+- **Ghosts:** fly beside a faint outline of your own best run on a mission, or
+  the node record holder's (**[G]** in the briefing chooses), and compare time
+  and fuel in the debrief. **[W]** on a leaderboard replays the leader's landing.
 - **Descent trace:** the debrief draws altitude over the burn, so you can see
   where the fuel went, and says so when most of it went early.
 - **Presentation:** scenery in quadrant blocks, two pixels across each cell, with
@@ -240,11 +243,14 @@ backups check is the records database, application ID `0x4C4C0001`:
 | Schema (`user_version`) | Tables | Releases |
 | --- | --- | --- |
 | 1 | `pilots`, `scores` | up to v0.4.x |
-| 2 | `pilots`, `scores`, `counters`, `achievements`, `programs`, `program_missions` | from the achievements release |
+| 2 | `pilots`, `scores`, `counters`, `achievements`, `programs`, `program_missions` | v0.5.x |
+| 3 | schema 2's, plus `ghosts`, `tours` | from the ghosts release |
 
-A schema 1 file upgrades to schema 2 in place on its first open, keeping every
-record; the upgrade only adds tables. NetBBS accepts schema 2 from the release
-that resolves [NetBBS #1561](https://github.com/Thiesi/NetBBS/issues/1561).
+An older file upgrades to the current schema in place on its first open, keeping
+every record; the upgrade only adds tables. NetBBS accepts schema 2 from the
+release that resolves [NetBBS #1561](https://github.com/Thiesi/NetBBS/issues/1561),
+and schema 3 from the one that resolves
+[NetBBS #1577](https://github.com/Thiesi/NetBBS/issues/1577).
 
 The banner is concept art rather than a game screen, and doubles as the
 repository's social preview; the [artwork notes](assets/README.md) explain how

@@ -27,6 +27,7 @@ import sys
 import textwrap
 import time
 import unicodedata
+import zlib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 VERSION = "0.5.2"
@@ -560,6 +561,10 @@ class Flight:
     # After lift-off, the pad's height until the feet are 2 m clear of it:
     # upright until then, and a soft touch back down stands it on the pad again.
     liftoff: float | None = None
+    # Physics steps flown, and (step, throttle, angle) whenever the controls
+    # change: with the mission, all a ghost needs to fly the run again.
+    steps: int = field(default=0, repr=False, compare=False)
+    log: list = field(default_factory=list, repr=False, compare=False)
 
     def command(self, key: str):
         if key in ("a", "left", "d", "right") and (self.resting or self.liftoff is not None):
@@ -622,6 +627,10 @@ class Flight:
     def step(self, dt: float = DT):
         if not 0 < dt <= 0.1:
             raise ValueError("flight steps must be in (0, 0.1] seconds")
+        if self.status == "flying":
+            if not self.log or self.log[-1][1:] != (self.throttle, self.angle):
+                self.log.append((self.steps, self.throttle, self.angle))
+            self.steps += 1
         if self.resting or self.liftoff is not None:
             self.angle = 0.0  # on a pad, or just off it: upright until clear
         if self.status != "flying" or (not self.resting and self.contact()):
@@ -1213,8 +1222,9 @@ class DailyClock:
 
 
 # The records schema. Version 1 held pilots and their bests; version 2 adds
-# running counters, achievements and Programs, all additive, so a version 1
-# file upgrades in place on its first open and keeps every record.
+# running counters, achievements and Programs; version 3 each best's ghost and
+# Grand Tours. All additive, so an older file upgrades in place on its first
+# open and keeps every record.
 SCHEMA = {
     "pilots": "CREATE TABLE pilots (node TEXT NOT NULL, user INTEGER NOT NULL, handle TEXT NOT NULL, PRIMARY KEY(node,user))",
     "scores": "CREATE TABLE scores (node TEXT NOT NULL, user INTEGER NOT NULL, mission TEXT NOT NULL, score INTEGER NOT NULL, achieved INTEGER NOT NULL, PRIMARY KEY(node,user,mission), FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
@@ -1222,9 +1232,12 @@ SCHEMA = {
     "achievements": "CREATE TABLE achievements (node TEXT NOT NULL, user INTEGER NOT NULL, key TEXT NOT NULL, achieved INTEGER NOT NULL, PRIMARY KEY(node,user,key), FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
     "programs": "CREATE TABLE programs (id INTEGER PRIMARY KEY, node TEXT NOT NULL, user INTEGER NOT NULL, season TEXT NOT NULL, preset TEXT NOT NULL, started INTEGER NOT NULL, ended INTEGER, status TEXT NOT NULL, score INTEGER NOT NULL, FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
     "program_missions": "CREATE TABLE program_missions (program INTEGER NOT NULL, mission INTEGER NOT NULL, sim_runs INTEGER NOT NULL, sim_seconds REAL NOT NULL, real_started INTEGER, result TEXT, score INTEGER NOT NULL, variation TEXT, PRIMARY KEY(program,mission), FOREIGN KEY(program) REFERENCES programs(id))",
+    "ghosts": "CREATE TABLE ghosts (node TEXT NOT NULL, user INTEGER NOT NULL, mission TEXT NOT NULL, score INTEGER NOT NULL, recorded INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(node,user,mission), FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
+    "tours": "CREATE TABLE tours (id INTEGER PRIMARY KEY, node TEXT NOT NULL, user INTEGER NOT NULL, started INTEGER NOT NULL, ended INTEGER, status TEXT NOT NULL, landed INTEGER NOT NULL, retries INTEGER NOT NULL, seconds REAL NOT NULL, score INTEGER NOT NULL, FOREIGN KEY(node,user) REFERENCES pilots(node,user))",
 }
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA_V1 = {"pilots", "scores"}
+SCHEMA_V2 = SCHEMA_V1 | {"counters", "achievements", "programs", "program_missions"}
 
 
 def _columns(statement: str) -> list[str]:
@@ -1254,10 +1267,10 @@ class Records:
                     self.db.execute(statement)
                 self.db.execute(f"PRAGMA application_id={self.APP_ID}")
                 self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            elif version == 1 and identity == self.APP_ID and tables == SCHEMA_V1:
-                # Version 1 upgrades in place: new tables only, every record kept.
+            elif identity == self.APP_ID and (version, tables) in ((1, SCHEMA_V1), (2, SCHEMA_V2)):
+                # Older versions upgrade in place: new tables only, every record kept.
                 for table, statement in SCHEMA.items():
-                    if table not in SCHEMA_V1:
+                    if table not in tables:
                         self.db.execute(statement)
                 self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             elif version != SCHEMA_VERSION or identity != self.APP_ID or tables != set(SCHEMA):
@@ -1288,8 +1301,16 @@ class Records:
         try:
             self.db.execute("BEGIN IMMEDIATE")
             self.identify(host)
+            now = time.time_ns()
             changed = self.db.execute("INSERT INTO scores VALUES (?,?,?,?,?) ON CONFLICT(node,user,mission) DO UPDATE SET score=excluded.score, achieved=excluded.achieved WHERE excluded.score > scores.score",
-                (host.node, host.user, mission.key, flight.score(mission.difficulty), time.time_ns())).rowcount
+                (host.node, host.user, mission.key, flight.score(mission.difficulty), now)).rowcount
+            if changed:
+                # The new best's ghost; a daily's goes a fortnight after its day.
+                self.db.execute("INSERT OR REPLACE INTO ghosts VALUES (?,?,?,?,?,?)",
+                                (host.node, host.user, mission.key, flight.score(mission.difficulty), now,
+                                 ghost_data(flight)))
+                self.db.execute("DELETE FROM ghosts WHERE node=? AND mission LIKE 'daily-%' AND recorded<?",
+                                (host.node, now - GHOST_KEEP_DAYS * 86400 * 10**9))
             self.db.execute("COMMIT")
             return bool(changed)
         except sqlite3.Error:
@@ -1311,6 +1332,12 @@ class Records:
                                                     (host.node,)):
             pilots.setdefault(user, {})[mission] = score
         return pilots
+
+    def ghost(self, host: Host, mission: Mission, user: int | None = None) -> bytes | None:
+        """A pilot's best run on a mission, as stored: the caller's own unless `user` says."""
+        row = self.db.execute("SELECT data FROM ghosts WHERE node=? AND user=? AND mission=?",
+                              (host.node, host.user if user is None else user, mission.key)).fetchone()
+        return row[0] if row else None
 
     def top(self, host: Host, mission: Mission) -> list[tuple[str, int, int]]:
         """The mission's ten best: handle, score and user id, so a board can mark the viewer's row."""
@@ -1973,6 +2000,46 @@ def debrief_call(flight: Flight, mission: Mission, award=None) -> str:
     return CRASH_CALLS[pick % len(CRASH_CALLS)]
 
 
+GHOST_COLOR = (92, 116, 160)
+GHOST_KEEP_DAYS = 14  # a daily's ghost outlives its day by this long
+
+
+def ghost_data(flight: Flight) -> bytes:
+    """A run as stored: its control changes and where it ended, compressed."""
+    record = {"v": 1, "inputs": flight.log, "end": [flight.steps, round(flight.x, 3), round(flight.y, 3)]}
+    return zlib.compress(json.dumps(record, separators=(",", ":")).encode("ascii"), 9)
+
+
+class Ghost:
+    """A recorded run flown again beside the pilot: the mission's start and the
+    recorded controls, step for step, so it is exactly the run that was flown."""
+
+    def __init__(self, mission: Mission, data: bytes, label: str):
+        record = json.loads(zlib.decompress(data))
+        if record.get("v") != 1:
+            raise ValueError("unknown ghost format")
+        self.inputs = [tuple(entry) for entry in record["inputs"]]
+        self.end = record["end"]
+        self.flight = mission.launch()
+        self.label = label
+        self._next = 0
+
+    def advance(self, steps: int):
+        """Fly on until it has flown `steps` physics steps, or has come down."""
+        flight = self.flight
+        while flight.steps < steps and flight.status == "flying":
+            while self._next < len(self.inputs) and self.inputs[self._next][0] <= flight.steps:
+                _, flight.throttle, flight.angle = self.inputs[self._next]
+                self._next += 1
+            flight.step()
+
+    def faithful(self) -> bool:
+        """Whether the whole run, flown again, ends where it was recorded."""
+        self.advance(self.end[0])
+        return (self.flight.steps == self.end[0] and abs(self.flight.x - self.end[1]) < .01
+                and abs(self.flight.y - self.end[2]) < .01)
+
+
 def descent_trace(flight: Flight, width: int, blocks: bool = True) -> list[str]:
     """Two sparklines for the debrief, altitude over the burn, and a hint when
     the fuel plainly went early. Empty when the flight is too short to tell."""
@@ -2558,6 +2625,8 @@ class Deck:
     logbook: Logbook | None = None
     kind: str = ""
     program: ProgramView | None = None
+    ghost: Ghost | None = None
+    ghost_choice: str = ""
 
 
 def full_card(height: int) -> bool:
@@ -2989,6 +3058,13 @@ class Display:
                 trace.pop()
             if len(trace) >= 2:
                 lines[trace_at:trace_at] = trace
+            # Against the ghost: time and fuel, where the card has room.
+            ghost = self.deck.ghost.flight if self.deck.ghost is not None else None
+            if landed and ghost is not None and ghost.status == "landed" and len(lines) < c.height - 4:
+                seconds, kg = flight.elapsed - ghost.elapsed, flight.fuel - ghost.fuel
+                lines.insert(trace_at, f"Against the ghost: {abs(seconds):.1f} s "
+                                       f"{'slower' if seconds > 0 else 'faster'}, {abs(kg):.1f} kg "
+                                       f"{'more' if kg >= 0 else 'less'} fuel")
         elif mode == "presets":
             view = self.deck.program or ProgramView()
             lines = [f"NEW PROGRAM / SEASON {view.season}", "",
@@ -3027,7 +3103,8 @@ class Display:
                 lines.append(f"{i:2}. {plain(name, 28):28} {score:6} pts  {medal(mission, score) or ''}")
             if not standings:
                 lines.append(record_note or "No landings recorded for this mission yet.")
-            lines += ["", "[B] or [ESC] Back to mission briefing"]
+            lines += ["", "[W] Watch the leader    [B] or [ESC] Back to briefing" if standings
+                      else "[B] or [ESC] Back to mission briefing"]
         if lines is not None:
             box_width = 66
             x, y = (c.width - box_width) // 2, max(3, (c.height - len(lines) - 1) // 2)
@@ -3156,6 +3233,11 @@ class Display:
             # The reset countdown on a line of its own, unless a long warning needs the wrap.
             notes = ([clock_note, "Not ranked."] if len(clock_note) <= rw else
                      textwrap.wrap(clock_note.rstrip(".") + ". Not ranked.", rw))
+            ghost_line = f"Not ranked. [G] Ghost: {self.deck.ghost_choice}"
+            if self.deck.ghost_choice and len(notes) == 2 and notes[1] == "Not ranked." and len(ghost_line) <= rw:
+                notes[1] = ghost_line
+        elif self.deck.ghost_choice and note.startswith("RANKED FLIGHT"):
+            notes = ["RANKED FLIGHT", plain(f"[G] Ghost: {self.deck.ghost_choice}", rw)]
         elif " / " in note:
             # "LABEL / detail" reads as a heading and its line, not wrapped mid-phrase.
             notes = note.split(" / ", 1)
@@ -3417,6 +3499,15 @@ class Display:
         size = "medium" if width >= 120 and height >= 40 else "small"
         sy = max(6, min(px_h - 5, feet_row - LANDERS[size][1]))
         sprites = []
+        ghost = self.deck.ghost.flight if self.deck.ghost is not None and self.deck.kind != "replay" else None
+        if ghost is not None:
+            # The ghost: the same craft in one dim colour, no plume, under the pilot's.
+            gx = round((ghost.x - left) / step - (across - 1) / 2)
+            gy = row_of(ghost.y - 3) - 1 - LANDERS[size][1]
+            shade = {k: (GHOST_COLOR, glyph) for k, (_, glyph) in
+                     lander_sprite(ghost.angle, 0, 0, size, across).items()}
+            sprites.append(({(dx, dy): v for (dx, dy), v in shade.items()
+                             if 0 <= gx + dx < px_w and 0 <= gy + dy < ground_row[gx + dx]}, gx, gy))
         if flight.status == "crashed":
             sprites.append((explosion(1.6, 4, 9, across), sx,
                             min(px_h - 1, row_of(ground.height(flight.x)) - 1)))
@@ -3508,11 +3599,17 @@ class Display:
         c.fill(0, 0, width, 2)
         c.text(0, 2, ("─" if unicode else "-") * width, rule, PANEL)
         c.rich(2, 0, _gradient("L U N A R   L A N D E R", (255, 240, 200), (232, 160, 58)), PANEL)
-        kind = {"sim": [("SIMULATOR ", 12)], "real": [("LIVE ", 8)]}.get(self.deck.kind, [("FLIGHT ", 9)])
+        kind = {"sim": [("SIMULATOR ", 12)], "real": [("LIVE ", 8)],
+                "replay": [("REPLAY ", 12)]}.get(self.deck.kind, [("FLIGHT ", 9)])
         flight_label = kind + [(plain(mission.name, 24), 5)]
         c.rich(width - 2 - sum(_cells(t) for t, _ in flight_label), 0, flight_label, PANEL)
-        c.rich(2, 1, [("PILOT ", 9), (self.host.handle, 7), ("  ", 9),
-                      (career(self.deck.bests, self.catalog).rank, 5)], PANEL, width // 2)
+        if self.deck.kind == "replay":
+            pilot = [("WATCHING ", 9), (self.deck.ghost.label, 7)]
+        else:
+            pilot = [("PILOT ", 9), (self.host.handle, 7), ("  ", 9), (career(self.deck.bests, self.catalog).rank, 5)]
+            if self.deck.ghost is not None:
+                pilot += [("  GHOST ", 9), (self.deck.ghost.label, GHOST_COLOR)]
+        c.rich(2, 1, pilot, PANEL, width // 2 + 10)
         view = [("VIEW ", 9), (f"{span:4.0f} m", 6), ("   T+", 9), (f"{flight.elapsed:5.1f}s", 6)]
         c.rich(width - 2 - sum(_cells(t) for t, _ in view), 1, view, PANEL)
         # Instruments: four gauges, the throttle, the touchdown limits and the keys.
@@ -3690,6 +3787,12 @@ class Game:
         self.record_note = ""
         self.before_quit = "flying"
         self.leaving = False
+        # Ghosts: which to fly beside ("mine", "best" or "off"), the one in
+        # flight, and a leader's run being watched.
+        self.ghost_mode = "mine"
+        self.ghost: Ghost | None = None
+        self.replay: Ghost | None = None
+        self.replay_age = 0.0
         # Best scores by mission key: from the records for a ranked pilot, for
         # this session alone otherwise, so a guest still sees medals earned.
         self.bests: dict[str, int] = {}
@@ -3828,6 +3931,44 @@ class Game:
     def career(self) -> Career:
         return career(self.bests, self.missions)
 
+    def find_ghost(self, mode: str | None = None) -> tuple[bytes, str] | None:
+        """The stored run the ghost choice names for the chosen mission, and its label."""
+        mode = mode or self.ghost_mode
+        if self.records is None or not self.mission.difficulty or mode == "off":
+            return None
+        try:
+            if mode == "mine":
+                data = self.records.ghost(self.host, self.mission) if self.host.ranked else None
+                return (data, "your best") if data else None
+            leaders = self.records.top(self.host, self.mission)
+            if not leaders:
+                return None
+            handle, _, user = leaders[0]
+            data = self.records.ghost(self.host, self.mission, user)
+            mine = self.host.ranked and user == self.host.user
+            return (data, "your best: the node's" if mine else f"{plain(handle, 16)}'s best") if data else None
+        except sqlite3.Error as exc:
+            print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
+            return None
+
+    def ghost_choice(self) -> str:
+        """The menu's ghost line: the choice and whether there is a run to fly against."""
+        if self.records is None or not self.mission.difficulty:
+            return ""
+        found = self.find_ghost()
+        return ("off" if self.ghost_mode == "off" else found[1] if found else
+                "yours, once you land" if self.ghost_mode == "mine" else "node best, none yet")
+
+    def load_ghost(self, mode: str | None = None, mission: Mission | None = None) -> Ghost | None:
+        found = self.find_ghost(mode)
+        if found is None:
+            return None
+        try:
+            return Ghost(mission or self.mission, *found)
+        except (ValueError, KeyError, TypeError, zlib.error) as exc:
+            print("Lunar Lander ghost unreadable: " + plain(str(exc), 160), file=sys.stderr)
+            return None
+
     def grant(self, keys) -> list[str]:
         """Award the achievements not yet held; return the new ones, in catalogue order."""
         new = [a.key for a in ACHIEVEMENTS if a.key in keys and a.key not in self.held]
@@ -3891,6 +4032,7 @@ class Game:
         self.kind = kind
         self.unlocked = []
         self.flight = (flown or self.mission).launch()
+        self.ghost = None if kind else self.load_ghost()
         self.mode = "launch" if self.scenes else "flying"
         self.scene_age = self.accumulator = 0
         self.record_note = self.ranking_note()
@@ -4014,6 +4156,19 @@ class Game:
                 return False
             self.select()
             return True
+        if self.mode == "menu" and key == "g" and self.records is not None and self.mission.difficulty:
+            order = ("mine", "best", "off")
+            self.ghost_mode = order[(order.index(self.ghost_mode) + 1) % len(order)]
+            return True
+        if self.mode == "scores" and key == "w":
+            self.replay = self.load_ghost("best")
+            if self.replay is None:
+                return False
+            self.mode, self.replay_age = "replay", 0.0
+            return True
+        if self.mode == "replay" and key in (" ", "escape", "b", "w", "enter"):
+            self.mode, self.replay = "scores", None
+            return True
         if self.mode == "menu" and key == "b":
             self.standings = []
             if self.records and self.mission.difficulty:
@@ -4080,6 +4235,13 @@ class Game:
                 if self.scene_age >= SCENE_SECONDS[self.mode] and self.mode != "splash":
                     self.finish_scene()
             return
+        if self.mode == "replay" and size_ok:
+            self.replay_age += min(.25, elapsed)
+            self.replay.advance(int(self.replay_age / DT))
+            # Hold the touchdown a moment, then back to the board.
+            if self.replay.flight.status != "flying" and self.replay_age > self.replay.flight.elapsed + 2.5:
+                self.mode, self.replay = "scores", None
+            return
         if self.mode != "flying" or not size_ok:
             self.accumulator = 0
             return
@@ -4087,6 +4249,10 @@ class Game:
         self.accumulator += min(.25, elapsed)
         while self.accumulator >= DT:
             self.flight.step()
+            if self.ghost is not None:
+                self.ghost.advance(self.flight.steps)
+                if self.flight.status != "flying":
+                    self.ghost.advance(self.ghost.end[0])  # its whole run, for the debrief
             self.accumulator -= DT
             if self.flight.status != "flying" and self.kind:
                 # A program flight: never a best, a medal or a promotion.
@@ -4245,13 +4411,16 @@ def run(host: Host, started: float) -> int:
                     ends = [left for left in (None if deadline is None else deadline - now, cpu_left)
                             if left is not None]
                     remaining = min(ends) if ends else None
-                    frame = display.draw(game.flight, game.mode, remaining, game.slow,
+                    replay = game.replay if game.mode == "replay" else None
+                    frame = display.draw(replay.flight if replay else game.flight, game.mode, remaining, game.slow,
                                          game.mission, game.standings, game.record_note, game.scene_age,
                                          clock.warning or clock.reset_note(),
                                          game.missions, Deck(game.chapter, game.bests,
                                                              game.records is not None and host.ranked, game.award,
-                                                             tuple(game.unlocked), game.logbook(), game.kind,
-                                                             game.program_view()))
+                                                             tuple(game.unlocked), game.logbook(),
+                                                             "replay" if replay else game.kind,
+                                                             game.program_view(), replay or game.ghost,
+                                                             game.ghost_choice() if game.mode == "menu" else ""))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the

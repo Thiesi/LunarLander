@@ -37,9 +37,9 @@ class SchemaTests(unittest.TestCase):
             return ({row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")},
                     db.execute("PRAGMA user_version").fetchone()[0])
 
-    def test_a_new_file_is_schema_2(self):
+    def test_a_new_file_is_the_current_schema(self):
         ll.Records(self.path).close()
-        self.assertEqual(self.tables(), (set(ll.SCHEMA), 2))
+        self.assertEqual(self.tables(), (set(ll.SCHEMA), ll.SCHEMA_VERSION))
 
     def test_schema_1_upgrades_in_place_and_keeps_every_record(self):
         with closing(sqlite3.connect(self.path)) as db, db:
@@ -53,7 +53,23 @@ class SchemaTests(unittest.TestCase):
         host = ll.Host(node="n", user=7)
         self.assertEqual(records.bests(host), {"tranquility": 1800})
         records.close()
-        self.assertEqual(self.tables(), (set(ll.SCHEMA), 2))
+        self.assertEqual(self.tables(), (set(ll.SCHEMA), ll.SCHEMA_VERSION))
+
+    def test_schema_2_upgrades_in_place_and_keeps_every_record(self):
+        with closing(sqlite3.connect(self.path)) as db, db:
+            for table in ll.SCHEMA_V2:
+                db.execute(ll.SCHEMA[table])
+            db.execute(f"PRAGMA application_id={ll.Records.APP_ID}")
+            db.execute("PRAGMA user_version=2")
+            db.execute("INSERT INTO pilots VALUES ('n', 7, 'Nib')")
+            db.execute("INSERT INTO scores VALUES ('n', 7, 'tranquility', 1800, 1)")
+            db.execute("INSERT INTO achievements VALUES ('n', 7, 'land-1', 1)")
+        records = ll.Records(self.path)
+        host = ll.Host(node="n", user=7)
+        self.assertEqual(records.bests(host), {"tranquility": 1800})
+        self.assertIsNone(records.ghost(host, ll.missions()[1]))  # old bests have no ghost
+        records.close()
+        self.assertEqual(self.tables(), (set(ll.SCHEMA), 3))
 
     def test_anything_else_is_refused_and_preserved(self):
         with closing(sqlite3.connect(self.path)) as db, db:
