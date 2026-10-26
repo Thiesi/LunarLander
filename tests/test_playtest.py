@@ -301,6 +301,16 @@ class SceneLifecycleTests(unittest.TestCase):
         game.tick(ll.SCENE_SECONDS["launch"] + .4, True)
         self.assertEqual((game.mode, game.flight.elapsed), ("flying", 0))
 
+    def test_a_medal_holds_until_a_key(self):
+        game = ll.Game(scenes=True)
+        game.mode, game.queue = "medal", ["promotion"]
+        game.tick(60, True)
+        self.assertEqual(game.mode, "medal")
+        self.assertTrue(game.key(" "))
+        self.assertEqual(game.mode, "promotion")
+        game.tick(ll.SCENE_SECONDS["promotion"] + .1, True)
+        self.assertEqual(game.mode, "debrief")
+
     def test_save_commits_before_landing_animation(self):
         with tempfile.TemporaryDirectory() as directory:
             records = ll.Records(Path(directory) / "pilots.db")
@@ -323,6 +333,11 @@ class SceneLifecycleTests(unittest.TestCase):
                 for _ in range(3):
                     game.key("r")
                     shown.append(game.mode)
+                    if game.mode == "medal":
+                        # A key during its fade-in is not spent: the medal is seen.
+                        self.assertFalse(game.key("r"))
+                        self.assertEqual(game.mode, "medal")
+                        game.tick(ll.MEDAL_GRACE, True)
                 self.assertEqual(shown, ["medal", "promotion", "debrief"])
                 self.assertEqual(len(records.top(host, game.mission)), 1)
             finally:
