@@ -5,7 +5,7 @@
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, three daily challenges, medals for every
-safe landing, 62 achievements, a career from Cadet to Lunar Ace, and Programs:
+safe landing, 63 achievements, a career from Cadet to Lunar Ace, and Programs:
 practise in the simulator, then fly each mission for real exactly once. Read the
 drift. Watch the fuel. Make both feet count.
 
@@ -60,12 +60,15 @@ itself.
 - **The fleet:** Commanders unlock the **Surveyor** (light and twitchy, a small
   tank, 15° a tilt) and Lunar Aces the **Altair** (heavy, a big tank, 5° a tilt
   and an engine that takes a moment to answer). **[V]** in the briefing picks
-  the craft; each keeps its own bests, boards and ghosts, apart from the LM's rank.
+  the craft; each keeps its own bests, boards and ghosts, apart from the LM's rank,
+  and each is drawn as itself. A hidden achievement unlocks a fourth craft, the
+  **Hopper**: cold-gas thrusters that never run dry but heat up as they fire.
+  Spend all the heat margin and they cut out until they have cooled to 40%.
 - **Grand Tour:** **[T]** flies all fifteen ranked missions in order, in one
   sitting: a crash means flying that mission again, the clock counts flight time
   only, and the node's best tours have their own board.
-- **Achievements:** 62 of them, from milestones and precision touchdowns to
-  close calls, weekend specials, history, instrument landings, the fleet, the Grand Tour, career feats, Programs and ten hidden ones. The **Pilot
+- **Achievements:** 63 of them, from milestones and precision touchdowns to
+  close calls, weekend specials, history, instrument landings, the fleet, the Grand Tour, career feats, Programs and eleven hidden ones. The **Pilot
   Record** ([P] in the flight director) shows the career, flight totals and
   personal records on one tab and the achievements, with how many of the node's
   pilots hold each, on the other.

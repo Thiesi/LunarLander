@@ -156,7 +156,7 @@ class SampleReturnTests(unittest.TestCase):
 
 class AchievementTests(unittest.TestCase):
     def test_two_more_in_the_weekend_group(self):
-        self.assertEqual(len(ll.ACHIEVEMENTS), 62)
+        self.assertEqual(sum(a.group == "WEEKENDS" for a in ll.ACHIEVEMENTS), 4)
         self.assertEqual(ll.ACHIEVEMENT["sample-return"].group, "WEEKENDS")
         self.assertEqual(ll.ACHIEVEMENT["rendezvous"].group, "WEEKENDS")
 
