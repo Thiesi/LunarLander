@@ -55,6 +55,8 @@ itself.
 - **Radio:** CAPCOM calls the fuel down as each alert begins, reads out height,
   sink and drift every few seconds below 60 m, and has a word for how it ended
   in the debrief, a first gold on a mission naming its base.
+- **Descent trace:** the debrief draws altitude over the burn, so you can see
+  where the fuel went, and says so when most of it went early.
 - **Presentation:** scenery in quadrant blocks, two pixels across each cell, with
   stars, a distant Earth and parallax ranges; a title splash with a rotating
   tagline; and skippable ignition, touchdown and crash scenes. Truecolor, 256-
