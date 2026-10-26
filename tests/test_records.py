@@ -33,7 +33,7 @@ def land(mission):
             ay = max(0.0, ay)  # to sink faster, ease off; never thrust downward
         angle = max(-60, min(60, round(math.degrees(math.atan2(ax, max(.1, ay))) / 10) * 10))
         flight.angle = angle
-        throttle = math.hypot(ax, ay) * (ll.DRY_MASS + flight.fuel) / ll.MAX_THRUST
+        throttle = math.hypot(ax, ay) * (flight.dry_mass + flight.fuel) / flight.thrust
         flight.command(str(max(0, min(9, round(throttle * 9)))))
         for _ in range(6):
             flight.step()
