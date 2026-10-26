@@ -207,10 +207,43 @@ class GameTests(unittest.TestCase):
         game = fly(self.game(), "2", vy=-.1)
         game.mode = "debrief"
         deck = ll.Deck(game.chapter, game.bests, True, game.award, tuple(game.unlocked), game.logbook())
-        canvas = ll.Display(ll.Host(node="n", user=7)).draw(game.flight, "debrief", mission=game.mission, deck=deck)
-        text = "\n".join("".join(cell[0] for cell in row) for row in canvas.cells)
-        self.assertIn("ACHIEVEMENT: First Contact (bronze)", text)
-        self.assertIn("more", text)
+        display = ll.Display(ll.Host(node="n", user=7))
+        count = len(game.unlocked)
+        self.assertGreater(count, 1)
+        # Each takes its turn on the line, with what it was for under it.
+        for n, key in enumerate(game.unlocked):
+            display.clock = lambda: n * ll.TURN_SECONDS + 1
+            canvas = display.draw(game.flight, "debrief", mission=game.mission, deck=deck)
+            rows = ["".join(cell[0] for cell in row) for row in canvas.cells]
+            shown = ll.ACHIEVEMENT[key]
+            at = next(i for i, row in enumerate(rows) if f"ACHIEVEMENT {n + 1} of {count}: {shown.name}" in row)
+            self.assertIn(shown.hint, rows[at + 1])
+            # The name in its medal's color, apart from the label.
+            col = rows[at].index(shown.name)
+            label = rows[at].index("ACHIEVEMENT")
+            self.assertNotEqual(canvas.cells[at][col][1], canvas.cells[at][label][1])
+
+    def test_the_record_shows_when_and_what_for(self):
+        game = fly(self.game(), "2", vy=-.1)
+        first = ll.ACHIEVEMENT["land-1"]
+        stamp = ll.datetime.fromtimestamp(game.held["land-1"] / 1e9, ll.timezone.utc).strftime("%Y-%m-%d")
+
+        def row(width, clock):
+            display = ll.Display(ll.Host(width, 50, node="n", user=7))
+            display.clock = lambda: clock
+            book = game.logbook()
+            text = ["".join(c[0] for c in line) for line in
+                    [[(ch, None) for text, _ in parts for ch in text]
+                     for parts in display.achievement_lines(book, width - 10)]]
+            return next(line for line in text if first.name in line)
+
+        # At 80 columns the date and what it was for take turns; wider, both show.
+        self.assertIn(stamp, row(80, 1))
+        self.assertNotIn(first.hint, row(80, 1))
+        self.assertIn(first.hint, row(80, ll.TURN_SECONDS + 1))
+        self.assertNotIn(stamp, row(80, ll.TURN_SECONDS + 1))
+        self.assertIn(stamp, row(132, 1))
+        self.assertIn(first.hint, row(132, 1))
 
     def test_old_bests_earn_quietly_at_launch(self):
         catalog = ll.missions()
