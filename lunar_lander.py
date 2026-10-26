@@ -30,7 +30,7 @@ import unicodedata
 import zlib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 DT = 1 / 60
 GRAVITY = 1.62
 DRY_MASS = 900.0
@@ -723,8 +723,9 @@ class Flight:
 
     def touchdown(self) -> tuple[float, float]:
         """The (vy, vx) the craft came down at: a sample return's last touchdown,
-        not its climb through the line."""
-        return self.touchdowns[-1] if self.ascent and self.touchdowns else (self.vy, self.vx)
+        not its climb through the line. A crash is the impact itself."""
+        landed = self.status == "landed" and self.ascent and self.touchdowns
+        return self.touchdowns[-1] if landed else (self.vy, self.vx)
 
     def spend(self, burn: float, power: float, h: float):
         """Burn fuel; or, in cold gas, heat margin, which idling wins back."""
@@ -1242,10 +1243,13 @@ def flight_log(mission: Mission, flight: Flight, outcome: str):
              "flight_seconds": flight.elapsed}
     if outcome != "landed":
         return added, {}, {}
-    pad = flight.terrain.pad
-    middle = sum(x for x, _ in flight.feet()) / 2
-    return added, {"softest": abs(flight.vy), "closest": abs(middle - (pad.left + pad.right) / 2)}, \
-        {"most_fuel": flight.fuel}
+    lowest = {"softest": abs(flight.touchdown()[0])}
+    if not flight.ascent:
+        # A sample return ends in the air: no foot position to measure.
+        pad = flight.terrain.pad
+        middle = sum(x for x, _ in flight.feet()) / 2
+        lowest["closest"] = abs(middle - (pad.left + pad.right) / 2)
+    return added, lowest, {"most_fuel": flight.fuel}
 
 
 def apply_log(counters: dict[str, float], added: dict, lowest: dict, highest: dict) -> dict[str, float]:
@@ -1273,6 +1277,7 @@ def flight_feats(mission: Mission, flight: Flight) -> set[str]:
     if flight.status == "landed" and flight.ascent:
         # The craft is in the air: its touchdown's precision is in the score.
         got.add("sample-return")
+        return got
     elif flight.status == "landed":
         middle = sum(x for x, _ in feet) / 2
         for key, met in (("feather", vy < .3), ("no-drift", vx < .1), ("dead-centre", abs(middle - centre) <= 1),
