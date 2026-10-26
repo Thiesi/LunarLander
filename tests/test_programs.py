@@ -219,7 +219,10 @@ class DisplayTests(unittest.TestCase):
             records = ll.Records(Path(directory) / "pilots.db")
             game = ll.Game(ll.Host(node="n", user=7, handle="Nib"), records, clock=clock())
             game.key("left")
-            self.assertIn("[N] Start a program", self.text(game))
+            text = self.text(game)
+            self.assertIn("[N] Start a program", text)
+            self.assertNotIn("[S] Simulator", text)  # no program yet: only the keys that work
+            self.assertNotIn("[ENTER] Real flight", text)
             game.key("n")
             text = self.text(game)
             for words in ("NEW PROGRAM", "CADET", "ASTRONAUT", "TEST PILOT"):
@@ -228,6 +231,7 @@ class DisplayTests(unittest.TestCase):
             text = self.text(game)
             self.assertIn("NEXT", text)
             self.assertIn("SIMULATOR 1 run left", text)
+            self.assertIn("[S] Simulator  [ENTER] Real flight", text)
             game.key("enter")
             self.assertIn("This is the real flight", self.text(game))
             game.key("y")
@@ -241,6 +245,7 @@ class DisplayTests(unittest.TestCase):
             text = self.text(game, "menu")
             self.assertIn("LOST", text)
             self.assertIn("PROGRAM OVER", text)
+            self.assertNotIn("[ENTER] Real flight", text)
             game.key("b")
             self.assertIn("PROGRAM BOARD / ASTRONAUT", self.text(game))
             records.close()
