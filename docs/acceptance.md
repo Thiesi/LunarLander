@@ -1,8 +1,23 @@
 # Release acceptance
 
-Target: `v0.6.0`. It is not a claim that every NetBBS transport or target
+Target: `v0.7.0`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.7.0: weekend specials and the Hopper
+
+- At weekends the Maria daily is a sample return and the Highlands daily a
+  rover rendezvous (#83); a hidden fourth craft, the Hopper, with cold-gas
+  thrusters that heat and cut out, and the Surveyor, Altair and Hopper drawn
+  as themselves (#84). 63 achievements.
+- 241 tests (unittest): the scripted pilot flies every weekend special of 2026
+  and 2027 and both in every craft with faithful ghosts; rover strike, near
+  and far parking (a far one is not saved); sample-return resting, settling
+  back and the climb; the Hopper's heating, cut-out and cooling, and its
+  pilot on every ranked and historic mission. Hosted CI with the real NetBBS
+  7.40.0 runtime on Linux and Windows passed on each change and on the
+  release commit. Saved data is unchanged from v0.6.0 (schema 3).
+- Not yet flown by a human: the two new weekend specials and the Hopper.
 
 ## v0.6.0: the roadmap release
 
@@ -210,6 +225,8 @@ before release and remain open:
 
 - v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
   pieces join without seams. NetBBS's web terminal draws them itself.
+- v0.7.0: a human pass over the sample return, the rover rendezvous and the
+  Hopper's heat (does the cut-out feel fair?).
 - v0.6.0: a human pass over weekend hops (is gold within reach?), the
   Surveyor's and Altair's handling, instrument landings, and whether the live
   line on a busy node reads as company or noise; a NetBBS backup and restore
