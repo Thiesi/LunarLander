@@ -70,6 +70,9 @@ itself.
 - **Ghosts:** fly beside a faint outline of your own best run on a mission, or
   the node record holder's (**[G]** in the briefing chooses), and compare time
   and fuel in the debrief. **[W]** on a leaderboard replays the leader's landing.
+- **Live descents:** the flight director's bottom edge says who else on the
+  node is flying right now ("Ace is descending on Tsiolkovsky..."), and how they
+  came down.
 - **Rivals:** when another pilot passes one of your bests while you're away, the
   mission is marked ▼ in the flight director and its briefing says who and by
   how much; **[G]** can then put their run beside you.
@@ -129,6 +132,7 @@ These settings go in the door profile's environment:
 | `DOOR_LL_PIXELS=half` | Draw with half blocks instead of quadrant blocks for every caller, for terminal fonts without quadrants (`▖▗▘▝`). On NetBBS 7.43.0 or later, callers choose this themselves (Profile ▸ Quarter blocks). |
 | `DOOR_SPLASH=0` or `DOOR_LL_SPLASH=0` | Skip the title splash. `DOOR_SPLASH` is shared with the other native doors. |
 | `DOOR_LL_SCENES=0` | Skip the ignition, touchdown and crash scenes. |
+| `DOOR_LL_LIVE=0` | Don't share or show who is flying right now (the `live` folder beside `pilots.db`). |
 | `DOOR_LL_DATE_FORMAT` | How the daily challenges show their date, for example `%d/%m/%Y`. Without it, the date follows the node's own format (NetBBS 7.41.0 or later), or ISO `%Y-%m-%d`. |
 
 ## Classic BBS setup
