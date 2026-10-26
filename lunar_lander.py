@@ -3153,11 +3153,11 @@ TAGLINES = (
 
 SCENE_SECONDS = {"splash": 5.0, "launch": 4.5, "landing": 2.6, "crash": 2.4, "medal": 3.2, "promotion": 4.4}
 # Played out, these hold their last frame until a key: a title to read, a medal
-# to admire.
-SCENE_HOLDS = ("splash", "medal")
-# A medal ignores keys until it has faded in, so a burn held through touchdown
+# or a promotion to admire, the reason for a crash.
+SCENE_HOLDS = ("splash", "medal", "promotion", "crash")
+# A medal, promotion or crash ignores keys this long, so a burn held through touchdown
 # cannot skip it unseen.
-MEDAL_GRACE = 1.2
+HOLD_GRACE = 1.2
 SCENE_MAX = (132, 50)
 SPLASH_PROMPT = "press any key to begin"
 
@@ -3437,7 +3437,7 @@ class Display:
             colors = ((255, 150, 120), rgb(8)) if kind == "crash" else ((255, 244, 214), (232, 160, 58))
             texts.append((2, max(1, (cols - len(spaced)) // 2), _gradient(spaced, *colors)))
             texts.append((4, max(1, (cols - len(subtitle)) // 2), [(subtitle, rgb(7))]))
-            hint = "[SPACE] Skip scene   " + self.back
+            hint = ("[SPACE] Continue   " if kind == "crash" else "[SPACE] Skip scene   ") + self.back
             texts.append((rows - 2, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
 
         # Beacons at the pad's corners: masts with cyan lamps.
@@ -4819,7 +4819,7 @@ class Game:
                 self.leaving = True
             return True
         if self.mode in SCENE_SECONDS:
-            if self.mode == "medal" and self.scene_age < MEDAL_GRACE:
+            if self.mode in ("medal", "promotion", "crash") and self.scene_age < HOLD_GRACE:
                 return False
             self.finish_scene()
             return True
