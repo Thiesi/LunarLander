@@ -1,8 +1,28 @@
 # Release acceptance
 
-Target: `v0.5.2`. It is not a claim that every NetBBS transport or target
+Target: `v0.6.0`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.6.0: the roadmap release
+
+- CAPCOM callouts, the descent trace, weekend hops, ghosts and replays,
+  rivals, the Grand Tour, instrument landings, postcards, the Surveyor and
+  the Altair, live descents and the HISTORY chapter (#71-#81, tracker #70).
+- **Records schema 3.** Adds the tables `ghosts` and `tours`; schema 1 and 2
+  files upgrade in place on first open, keeping every record (one-way). Tests
+  cover a new file, both upgrades and refusal of anything newer. NetBBS's
+  backups accept schema 3 from Thiesi/NetBBS#1577 on, so this release must not
+  run on a node before the NetBBS release that bundles it.
+- Live descents keep small files in a `live/` folder beside `pilots.db`; they
+  are transient and need no backup. `DOOR_LL_LIVE=0` turns them off.
+- 223 tests (unittest): ghosts replay exactly for every mission and craft, the
+  scripted pilot lands every weekend hop of 2026 and 2027 and every mission in
+  every craft, historic facts as cited in #81. Hosted CI with the real NetBBS
+  7.40.0 runtime on Linux and Windows passed on each change and on the
+  release commit.
+- Not yet flown by a human: hop gold, the Surveyor's and Altair's handling,
+  and whether the live line is welcome or noise. Listed below.
 
 ## v0.5.2: cosmetic fixes
 
@@ -190,6 +210,10 @@ before release and remain open:
 
 - v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
   pieces join without seams. NetBBS's web terminal draws them itself.
+- v0.6.0: a human pass over weekend hops (is gold within reach?), the
+  Surveyor's and Altair's handling, instrument landings, and whether the live
+  line on a busy node reads as company or noise; a NetBBS backup and restore
+  of schema 3 records once NetBBS ships #1577.
 - v0.5.1: PuTTY with its default font on NetBBS 7.43.0 (Quarter blocks on
   Auto) sees half-block scenery with no boxes; with Quarter blocks On, the
   quadrant picture.
