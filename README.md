@@ -69,6 +69,9 @@ itself.
 - **Rivals:** when another pilot passes one of your bests while you're away, the
   mission is marked ▼ in the flight director and its briefing says who and by
   how much; **[G]** can then put their run beside you.
+- **Postcards:** after a gold, **[C]** in the debrief shows a keepsake: your
+  craft on its pad with a flag beside it, the Earth over the ridge, and who
+  landed it, when and how well.
 - **Descent trace:** the debrief draws altitude over the burn, so you can see
   where the fuel went, and says so when most of it went early.
 - **Presentation:** scenery in quadrant blocks, two pixels across each cell, with

@@ -2089,8 +2089,7 @@ def debrief_call(flight: Flight, mission: Mission, award=None) -> str:
     if flight.status == "landed":
         if award is not None and award.mission.key == mission.key and award.medal == "GOLD" and award.improved:
             # A daily's name carries its date: the base is named for its manner alone.
-            name = mission.name.removesuffix(" IFR")
-            base = (name.split(" ", 1)[0] if any(ch.isdigit() for ch in name) else name).title() + " Base"
+            base = base_name(mission)
             call = f"Houston, {base} here. The Eagle has landed."
             return call if len(call) <= 56 else f"{base} here. The Eagle has landed."
         if flight.fuel < .1 * flight.initial_fuel:
@@ -2139,6 +2138,22 @@ class Ghost:
         self.advance(self.end[0])
         return (self.flight.steps == self.end[0] and abs(self.flight.x - self.end[1]) < .01
                 and abs(self.flight.y - self.end[2]) < .01)
+
+
+def flag_sprite(across: int = 1) -> dict:
+    """A mission flag on its pole, planted beside the craft: base at (0, 0), upward."""
+    pole, cloth, stripe = (176, 180, 190), (236, 238, 244), (232, 160, 58)
+    sprite = {(0, -dy): (pole, "|") for dy in range(10)}
+    for dy in range(6, 10):
+        for dx in range(1, 1 + 7 * across):
+            sprite[(dx, -dy)] = (stripe if dy == 7 else cloth, "=" if dy == 7 else "#")
+    return sprite
+
+
+def base_name(mission: Mission) -> str:
+    """Where a landing put the crew: "Tranquility Base", or a daily's manner's."""
+    name = mission.name.removesuffix(" IFR")
+    return (name.split(" ", 1)[0] if any(ch.isdigit() for ch in name) else name).title() + " Base"
 
 
 def descent_trace(flight: Flight, width: int, blocks: bool = True) -> list[str]:
@@ -2992,6 +3007,23 @@ class Display:
                 texts.append((rows - 4, max(1, (cols - len(caption)) // 2), [(caption, rgb(7))]))
             hint = "[SPACE] Continue   " + self.back
             texts.append((rows - 2, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
+        elif kind == "postcard":
+            # A keepsake of a gold: the craft on its pad, the flag beside it,
+            # the Earth over the ridge, and who landed it, when, how well.
+            beacon_on = True
+            ground = pad_y - 1 - feet
+            sprites.append((lander_sprite(0, 0, 0, "large", across), pad_c, ground))
+            sprites.append((flag_sprite(across), min(w - 8 * across, pad_r + 4 * across), pad_y - 1))
+            award = self.deck.award
+            spaced = "  ".join("GREETINGS FROM")
+            texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, (255, 244, 214), (232, 160, 58))))
+            place = base_name(mission or award.mission).upper()
+            texts.append((3, max(1, (cols - len(place)) // 2), [(place, (255, 240, 200))]))
+            caption = plain(f"{self.host.handle}  /  {date.today().isoformat()}  /  "
+                            f"{award.score:,} pts  /  {award.medal}" if award else self.host.handle, cols - 4)
+            texts.append((rows - 4, max(1, (cols - len(caption)) // 2), [(caption, MEDAL_COLORS["GOLD"][1])]))
+            hint = "[SPACE] Back to the debrief   " + self.back
+            texts.append((rows - 2, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
         else:
             title = {"launch": "GO FOR DESCENT", "landing": "CONTACT LIGHT", "crash": "SIGNAL LOST"}[kind]
             subtitle = {"launch": "Attitude control online / descent engine armed",
@@ -3089,7 +3121,7 @@ class Display:
             c.text(0, 0, "Resize to 80x24. Q: exit", 5)
             c.text(0, 2, "Flight paused; session timer continues.", 7)
             return c
-        if mode in SCENE_SECONDS:
+        if mode in SCENE_SECONDS or mode == "postcard":
             return self.scene(c, mode, scene_age, flight, record_note, mission)
         span = self.cockpit(c, flight, mission, remaining, slow)
         unicode = self.host.unicode
@@ -3158,6 +3190,10 @@ class Display:
             tour = self.deck.tour
             if landed and tour and tour["status"] == "active" and tour["next"]:
                 keys = f"[ENTER] Tour {tour['landed'] + 1}/{tour['count']}: {tour['next']}    [M] Briefing"
+            award = self.deck.award
+            if landed and award is not None and award.medal == "GOLD" and award.mission.key == mission.key \
+                    and len(keys) + 16 <= 60:
+                keys += "    [C] Postcard"
             lines += [record_note or "Training flight / unranked", "", keys, self.back]
             # The descent trace, where the card has room for it (not at 80x24 after a medal).
             trace = descent_trace(flight, 55, unicode and self.host.charset in (None, "utf-8"))
@@ -4506,6 +4542,15 @@ class Game:
                 and self.flight.status == "landed":
             self.fly_tour()
             return True
+        if self.mode == "debrief" and key == "c" and self.award is not None and self.award.medal == "GOLD" \
+                and self.flight.status == "landed":
+            self.mode = "postcard"
+            return True
+        if self.mode == "postcard":
+            if key in (" ", "escape", "c", "enter"):
+                self.mode = "debrief"
+                return True
+            return False
         if self.mode == "debrief" and key in ("r", "m"):
             if key == "r" and self.kind == "real":
                 return False
@@ -4726,7 +4771,7 @@ def run(host: Host, started: float) -> int:
                     # arrives (which redraws at once) or a countdown ticks, and the
                     # splash's hold only twinkles, so idling costs little CPU.
                     if game.mode in ("menu", "help", "paused", "debrief", "scores", "confirm", "record",
-                                     "presets", "commit", "program-board", "tour", "tour-board"):
+                                     "presets", "commit", "program-board", "tour", "tour-board", "postcard"):
                         next_frame = now + 1
                     elif game.mode == "splash" and game.scene_age >= SCENE_SECONDS["splash"]:
                         next_frame = now + .25
