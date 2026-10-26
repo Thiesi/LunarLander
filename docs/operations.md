@@ -55,8 +55,8 @@ releases keep what they earned and no migration is needed. The dailies show
 today's medals but do not count toward rank. Callers without a NetBBS
 identity earn medals for the session only.
 
-Ranked flights also count toward 56 achievements: milestones (landings, time in
-the air, crashes, simulator time), precision and close-call landings, hops, instrument landings, the Grand Tour, nine
+Ranked flights also count toward 58 achievements: milestones (landings, time in
+the air, crashes, simulator time), precision and close-call landings, hops, instrument landings, the fleet, the Grand Tour, nine
 hidden spectacular crashes, completed Programs, and career feats from bests (chapters landed and gold, the top rank,
 all three dailies in a day, daily streaks). Achievements that bests already earn
 are awarded quietly the first time a pilot launches this release. The debrief

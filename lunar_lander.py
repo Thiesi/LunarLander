@@ -36,6 +36,14 @@ GRAVITY = 1.62
 DRY_MASS = 900.0
 MAX_THRUST = 3600.0
 FUEL_FLOW = 1.2
+# The fleet: (name, dry mass kg, thrust N, tank as a share of the mission's,
+# degrees per tilt key, engine lag s, the rank level that unlocks it). The LM
+# is the baseline; the others fly the same missions differently.
+CRAFT = {
+    "lm": ("LM", DRY_MASS, MAX_THRUST, 1.0, 10, 0.0, 0),
+    "surveyor": ("SURVEYOR", 500.0, 2400.0, .75, 15, 0.0, 4),
+    "altair": ("ALTAIR", 1600.0, 4800.0, 1.25, 5, 0.6, 6),
+}
 TRACE_EVERY = 0.5
 
 
@@ -551,6 +559,12 @@ class Flight:
     status: str = "flying"
     reason: str = ""
     gravity: float = GRAVITY
+    dry_mass: float = DRY_MASS
+    thrust: float = MAX_THRUST
+    tilt_step: float = 10.0
+    # The engine follows the throttle with this time constant (s); 0: at once.
+    lag: float = 0.0
+    engine: float = field(default=0.0, repr=False, compare=False)
     # (altitude, fuel) every TRACE_EVERY seconds, for the debrief's descent trace.
     trace: list = field(default_factory=list, repr=False, compare=False)
     # A hop's pads still to come after the lit one, the (vy, vx) of each
@@ -570,9 +584,9 @@ class Flight:
         if key in ("a", "left", "d", "right") and (self.resting or self.liftoff is not None):
             return  # on a pad, or just off it: upright until clear
         if key in ("a", "left"):
-            self.angle = max(-60.0, self.angle - 10)
+            self.angle = max(-60.0, self.angle - self.tilt_step)
         elif key in ("d", "right"):
-            self.angle = min(60.0, self.angle + 10)
+            self.angle = min(60.0, self.angle + self.tilt_step)
         elif key in ("w", "up"):
             self.throttle = min(1.0, round(self.throttle + 0.1, 2))
         elif key in ("s", "down"):
@@ -641,9 +655,11 @@ class Flight:
         steps = max(1, math.ceil((math.hypot(self.vx, self.vy) + 10) * dt / 0.25))
         h = dt / steps
         for _ in range(steps):
-            burn = min(self.fuel, FUEL_FLOW * self.throttle * h)
+            self.engine = (self.throttle if not self.lag else
+                           self.engine + (self.throttle - self.engine) * min(1.0, h / self.lag))
+            burn = min(self.fuel, FUEL_FLOW * self.engine * h)
             power = burn / (FUEL_FLOW * h)
-            acceleration = MAX_THRUST * power / (DRY_MASS + self.fuel - burn / 2)
+            acceleration = self.thrust * power / (self.dry_mass + self.fuel - burn / 2)
             if self.resting:
                 self.angle = 0.0
                 if acceleration <= self.gravity:
@@ -704,6 +720,7 @@ class Mission:
     gravity: float = GRAVITY
     # A hop: the second pad's centre, this far from the first (0: no hop).
     hop: float = 0.0
+    craft: str = "lm"
 
     def launch(self) -> Flight:
         if self.difficulty == 0:
@@ -716,9 +733,11 @@ class Mission:
         for p in pads:
             points.extend(((p.left, p.height), (p.right, p.height)))
         points.append((1000.0, 80.0))
+        _, dry_mass, thrust, _, tilt_step, lag, _ = CRAFT[self.craft]
         return Flight(Terrain(tuple(sorted(points)), pad), x=self.center + self.offset,
                       y=self.altitude, vx=self.drift, vy=self.sink, fuel=self.fuel, initial_fuel=self.fuel,
-                      gravity=self.gravity, pads=pads[1:])
+                      gravity=self.gravity, pads=pads[1:], dry_mass=dry_mass, thrust=thrust,
+                      tilt_step=tilt_step, lag=lag)
 
 
 # The day's three challenges, one in the manner of each chapter. Every setting
@@ -902,10 +921,26 @@ def on_instruments(mission: Mission) -> Mission:
     return replace(mission, key=mission.key + IFR, name=mission.name + " IFR")
 
 
+def in_craft(mission: Mission, craft: str) -> Mission:
+    """The mission flown in another of the fleet: its own key and bests, the
+    craft's share of the mission's fuel."""
+    if craft == "lm" or mission.craft != "lm":
+        return mission
+    return replace(mission, key=f"{mission.key}@{craft}", name=f"{mission.name} {CRAFT[craft][0]}",
+                   fuel=round(mission.fuel * CRAFT[craft][3]), craft=craft)
+
+
+def variant_key(key: str, craft: str = "lm", ifr: bool = False) -> str:
+    """The key a mission's bests are kept under, flown in `craft`, perhaps on instruments."""
+    return key + (f"@{craft}" if craft != "lm" else "") + (IFR if ifr else "")
+
+
 def mission_title(mission: Mission) -> str:
-    """A mission's name for prose: "Tranquility", "Hadley Rille on instruments"."""
-    name = mission.name.removesuffix(" IFR")
-    return name.title() + (" on instruments" if mission.key.endswith(IFR) else "")
+    """A mission's name for prose: "Tranquility", "Hadley Rille on instruments",
+    "Polar Approach in the Altair"."""
+    name = mission.name.removesuffix(" IFR").removesuffix(" " + CRAFT[mission.craft][0])
+    return (name.title() + (f" in the {CRAFT[mission.craft][0].title()}" if mission.craft != "lm" else "")
+            + (" on instruments" if mission.key.endswith(IFR) else ""))
 
 
 def tour_missions(catalog: tuple[Mission, ...]) -> tuple[Mission, ...]:
@@ -1042,6 +1077,9 @@ _CATALOGUE = (
     ("INSTRUMENTS", (
         ("ifr", "Blind Faith", "BRONZE", "Land on instruments alone"),
         ("ifr-gold", "Cross-Pointer", "SILVER", "Earn gold on instruments alone"))),
+    ("FLEET", (
+        ("craft-surveyor", "Light Touch", "SILVER", "Earn gold in the Surveyor"),
+        ("craft-altair", "Heavy Lifter", "SILVER", "Earn gold in the Altair"))),
     ("GRAND TOUR", (
         ("grand-tour", "Grand Tour", "SILVER", "Land every ranked mission in one tour"),
         ("grand-slam", "Grand Slam", "GOLD", "Gold on every mission of one tour"))),
@@ -1113,6 +1151,8 @@ def flight_feats(mission: Mission, flight: Flight) -> set[str]:
                 got.add(key)
         if {"feather", "no-drift", "dead-centre"} <= got:
             got.add("perfect")
+        if mission.craft != "lm" and medal(mission, flight.score(mission.difficulty)) == "GOLD":
+            got.add("craft-" + mission.craft)
         if mission.key.endswith(IFR):
             got.add("ifr")
             if medal(mission, flight.score(mission.difficulty)) == "GOLD":
@@ -2051,16 +2091,17 @@ _ROLE_RANK = {role: n for n, role in enumerate("WwFYOXGgoSsdhLPNnkARD")}
 FUEL_LOW_SECONDS, FUEL_CRITICAL_SECONDS = 30, 10
 
 
-def hover_seconds(fuel: float, gravity: float = GRAVITY) -> float:
+def hover_seconds(fuel: float, gravity: float = GRAVITY, dry_mass: float = DRY_MASS,
+                  thrust: float = MAX_THRUST) -> float:
     """How long `fuel` holds the lander in a hover: the burn that just cancels gravity."""
-    return fuel / (FUEL_FLOW * min(1.0, gravity * (DRY_MASS + fuel) / MAX_THRUST))
+    return fuel / (FUEL_FLOW * min(1.0, gravity * (dry_mass + fuel) / thrust))
 
 
 def fuel_alert(flight: Flight) -> int:
     """0 while fuel is ample, 1 low, 2 critical and 3 empty, by the hover time left."""
     if flight.fuel <= 0:
         return 3
-    left = hover_seconds(flight.fuel, flight.gravity)
+    left = hover_seconds(flight.fuel, flight.gravity, flight.dry_mass, flight.thrust)
     return 2 if left <= FUEL_CRITICAL_SECONDS else 1 if left <= FUEL_LOW_SECONDS else 0
 
 
@@ -2152,7 +2193,7 @@ def flag_sprite(across: int = 1) -> dict:
 
 def base_name(mission: Mission) -> str:
     """Where a landing put the crew: "Tranquility Base", or a daily's manner's."""
-    name = mission.name.removesuffix(" IFR")
+    name = mission.name.removesuffix(" IFR").removesuffix(" " + CRAFT[mission.craft][0])
     return (name.split(" ", 1)[0] if any(ch.isdigit() for ch in name) else name).title() + " Base"
 
 
@@ -2746,6 +2787,8 @@ class Deck:
     rivals: dict = field(default_factory=dict)
     tour: dict | None = None
     ifr: bool = False
+    craft: str = "lm"
+    fleet: tuple = ("lm",)
 
 
 def full_card(height: int) -> bool:
@@ -3374,9 +3417,15 @@ class Display:
                 c.text(lx + 24, row, "free", 9, bg)
         # The briefing.
         told = 2 if compact else 3  # lines of description
-        c.text(rx, top, plain(mission.name, rw - 8), 5, PANEL)
+        switches = []
         if mission.difficulty and not program_tab:
-            c.rich(rx + rw - 7, top, [("[I] ", 9), ("IFR", 8 if deck.ifr else 9)], PANEL)
+            if len(deck.fleet) > 1:
+                switches += [("[V] ", 9), (CRAFT[deck.craft][0] + "  ", 6)]
+            switches += [("[I] ", 9), ("IFR", 8 if deck.ifr else 9)]
+        width = sum(_cells(text) for text, _ in switches)
+        c.text(rx, top, plain(mission.name, rw - width - 1), 5, PANEL)
+        if switches:
+            c.rich(rx + rw - width, top, switches, PANEL)
         for n, line in enumerate(textwrap.wrap(mission.description, rw)[:told]):
             c.text(rx, top + 1 + n, line, 7, PANEL)
         stats = (("PAD", f"{mission.width:.0f} m"), ("FUEL", f"{mission.fuel:.0f} kg"),
@@ -3388,7 +3437,7 @@ class Display:
         if program_tab:
             self.program_briefing(c, view, mission, rx, rw, stats_row + 2, compact)
         elif mission.difficulty:
-            best = deck.bests.get(mission.key + IFR if deck.ifr else mission.key, 0)
+            best = deck.bests.get(variant_key(mission.key, deck.craft, deck.ifr), 0)
             earned = medal(mission, best)
             c.rich(rx, stats_row + 2, [("TODAY " if daily else "BEST ", 9)] +
                    ([(f"{best} pts ", 6), (earned, MEDAL_COLORS[earned][1])] if earned else [("not landed yet", 9)]),
@@ -3733,7 +3782,7 @@ class Display:
         flashing = level == 2 or (level == 1 and self.frame - self._alert[1] < 30)
         lit = not flashing or self.frame % 6 < 4
         if lit:
-            seconds = f"{hover_seconds(flight.fuel, flight.gravity):.0f} S HOVER LEFT"
+            seconds = f"{hover_seconds(flight.fuel, flight.gravity, flight.dry_mass, flight.thrust):.0f} S HOVER LEFT"
             dot = "  ·  " if self.host.unicode else "  -  "
             text = {1: "LOW FUEL" + dot + seconds, 2: "FUEL CRITICAL" + dot + seconds,
                     3: "FUEL EXHAUSTED"}[level]
@@ -4007,6 +4056,7 @@ class Game:
         # flight, and a leader's run being watched.
         self.ghost_mode = "mine"
         self.ifr = False  # the next ranked flight on instruments alone
+        self.craft = "lm"  # and in which of the fleet
         self.ghost: Ghost | None = None
         self.replay: Ghost | None = None
         self.replay_age = 0.0
@@ -4166,6 +4216,16 @@ class Game:
     def career(self) -> Career:
         return career(self.bests, self.missions)
 
+    def fleet(self) -> list[str]:
+        """The craft this pilot's rank has unlocked, the LM first."""
+        level = self.career().level
+        return [key for key, (*_, needed) in CRAFT.items() if level >= needed]
+
+    def variant(self, mission: Mission) -> Mission:
+        """The mission as the briefing's switches would fly it."""
+        mission = in_craft(mission, self.craft)
+        return on_instruments(mission) if self.ifr else mission
+
     def tour_next(self) -> Mission | None:
         """The tour mission up next, if a tour is under way."""
         tours = tour_missions(self.missions)
@@ -4183,7 +4243,7 @@ class Game:
     def fly_tour(self):
         """Launch the tour's next mission, choosing it in the flight director too."""
         upcoming = self.tour_next()
-        self.ifr = False  # a tour is flown with the window open
+        self.ifr, self.craft = False, "lm"  # a tour is flown in the LM, with the window open
         for n, chapter in enumerate(CHAPTERS):
             shelf = chapter_missions(chapter, self.missions)
             if upcoming in shelf:
@@ -4329,8 +4389,8 @@ class Game:
         self.refresh_daily()
         self.kind = kind
         self.unlocked = []
-        if self.ifr and not kind and self.mission.difficulty:
-            self.mission = on_instruments(self.mission)
+        if not kind and self.mission.difficulty:
+            self.mission = self.variant(self.mission)
         self.flight = (flown or self.mission).launch()
         self.ghost = None if kind or self.mission.key.endswith(IFR) else self.load_ghost()
         self.mode = "launch" if self.scenes else "flying"
@@ -4456,6 +4516,12 @@ class Game:
                 return False
             self.select()
             return True
+        if self.mode == "menu" and key == "v" and self.mission.difficulty and not self.on_program_tab():
+            fleet = self.fleet()
+            if len(fleet) < 2:
+                return False
+            self.craft = fleet[(fleet.index(self.craft) + 1) % len(fleet)] if self.craft in fleet else "lm"
+            return True
         if self.mode == "menu" and key == "i" and self.mission.difficulty and not self.on_program_tab():
             self.ifr = not self.ifr
             return True
@@ -4478,8 +4544,7 @@ class Game:
             self.standings = []
             if self.records and self.mission.difficulty:
                 try:
-                    self.standings = self.records.top(self.host, on_instruments(self.mission) if self.ifr
-                                                      else self.mission)
+                    self.standings = self.records.top(self.host, self.variant(self.mission))
                 except sqlite3.Error as exc:
                     self.record_note = "Records unavailable; ask your SysOp to check storage."
                     print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
@@ -4765,7 +4830,8 @@ def run(host: Host, started: float) -> int:
                                                              "replay" if replay else game.kind,
                                                              game.program_view(), replay or game.ghost,
                                                              game.ghost_choice() if game.mode == "menu" else "",
-                                                             game.live_rivals(), game.tour_view(), game.ifr))
+                                                             game.live_rivals(), game.tour_view(), game.ifr,
+                                                             game.craft, tuple(game.fleet())))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
