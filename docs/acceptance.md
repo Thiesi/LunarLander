@@ -1,8 +1,19 @@
 # Release acceptance
 
-Target: `v0.5.0`. It is not a claim that every NetBBS transport or target
+Target: `v0.5.1`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.5.1: half blocks for fonts without quarter blocks
+
+- NetBBS 7.43.0 sends `quadrants` in the door metadata (Thiesi/NetBBS#1560);
+  when it is false the door draws that caller in half blocks (#43). Absent or
+  non-boolean values change nothing, and a CP437 caller still gets half blocks.
+- 146 tests (unittest), Windows / Python 3.14.7; hosted CI with the real
+  NetBBS 7.40.0 runtime on Linux and Windows passed on the change and on the
+  release commit. Saved data is unchanged from v0.5.0 (schema 2).
+- Not yet seen on a live NetBBS 7.43.0 node with PuTTY and Profile ▸ Quarter
+  blocks on Auto. Listed below.
 
 ## v0.5.0: achievements, the Pilot Record and Programs
 
@@ -168,6 +179,9 @@ before release and remain open:
 
 - v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
   pieces join without seams. NetBBS's web terminal draws them itself.
+- v0.5.1: PuTTY with its default font on NetBBS 7.43.0 (Quarter blocks on
+  Auto) sees half-block scenery with no boxes; with Quarter blocks On, the
+  quadrant picture.
 - v0.5.0: a human pass over achievements (are any too easy or out of reach?),
   a full program in each preset, and the Pilot Record at 80x24; a NetBBS
   backup and restore of schema 2 records once NetBBS supports it (#1561).
