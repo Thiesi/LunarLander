@@ -5,7 +5,7 @@
 A real-time, single-player lunar landing door game for BBSes. Guide a fragile
 lander between lunar ridges and settle it onto a lit pad on a dwindling tank:
 fifteen ranked missions in three chapters, three daily challenges, medals for every
-safe landing, 54 achievements, a career from Cadet to Lunar Ace, and Programs:
+safe landing, 56 achievements, a career from Cadet to Lunar Ace, and Programs:
 practise in the simulator, then fly each mission for real exactly once. Read the
 drift. Watch the fuel. Make both feet count.
 
@@ -45,11 +45,15 @@ itself.
   loses that mission), **Astronaut** (one run per mission; a crash ends the
   program) or **Test Pilot** (no simulator; a crash ends it). Each preset has
   its own board, and leaving or losing the connection mid-flight counts as a crash.
+- **Instrument landing:** **[I]** in the briefing flies the mission with the
+  window dark: a radar altimeter, the pad's bearing and a cross-pointer for drift
+  and sink. Instrument landings keep their own bests, board and ghost, and never
+  touch the visual ones or your rank.
 - **Grand Tour:** **[T]** flies all fifteen ranked missions in order, in one
   sitting: a crash means flying that mission again, the clock counts flight time
   only, and the node's best tours have their own board.
-- **Achievements:** 54 of them, from milestones and precision touchdowns to
-  close calls, hops, the Grand Tour, career feats, Programs and ten hidden ones. The **Pilot
+- **Achievements:** 56 of them, from milestones and precision touchdowns to
+  close calls, hops, instrument landings, the Grand Tour, career feats, Programs and ten hidden ones. The **Pilot
   Record** ([P] in the flight director) shows the career, flight totals and
   personal records on one tab and the achievements, with how many of the node's
   pilots hold each, on the other.

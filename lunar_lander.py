@@ -892,6 +892,22 @@ CHAPTERS = (
 )
 
 
+IFR = "@ifr"  # an instrument landing's key suffix: its own bests, board and ghost
+
+
+def on_instruments(mission: Mission) -> Mission:
+    """The mission flown on instruments alone: the same flight under its own key."""
+    if mission.key.endswith(IFR):
+        return mission
+    return replace(mission, key=mission.key + IFR, name=mission.name + " IFR")
+
+
+def mission_title(mission: Mission) -> str:
+    """A mission's name for prose: "Tranquility", "Hadley Rille on instruments"."""
+    name = mission.name.removesuffix(" IFR")
+    return name.title() + (" on instruments" if mission.key.endswith(IFR) else "")
+
+
 def tour_missions(catalog: tuple[Mission, ...]) -> tuple[Mission, ...]:
     """The Grand Tour: every ranked mission, in chapter order."""
     return tuple(mission for chapter in CHAPTERS if chapter.ranked
@@ -1023,6 +1039,9 @@ _CATALOGUE = (
     ("HOPS", (
         ("hop", "Grasshopper", "BRONZE", "Land both pads of a hop"),
         ("hop-gold", "Kangaroo", "SILVER", "Earn gold on a hop"))),
+    ("INSTRUMENTS", (
+        ("ifr", "Blind Faith", "BRONZE", "Land on instruments alone"),
+        ("ifr-gold", "Cross-Pointer", "SILVER", "Earn gold on instruments alone"))),
     ("GRAND TOUR", (
         ("grand-tour", "Grand Tour", "SILVER", "Land every ranked mission in one tour"),
         ("grand-slam", "Grand Slam", "GOLD", "Gold on every mission of one tour"))),
@@ -1094,6 +1113,10 @@ def flight_feats(mission: Mission, flight: Flight) -> set[str]:
                 got.add(key)
         if {"feather", "no-drift", "dead-centre"} <= got:
             got.add("perfect")
+        if mission.key.endswith(IFR):
+            got.add("ifr")
+            if medal(mission, flight.score(mission.difficulty)) == "GOLD":
+                got.add("ifr-gold")
         if flight.touchdowns:
             got.add("hop")
             if medal(mission, flight.score(mission.difficulty)) == "GOLD":
@@ -2066,8 +2089,8 @@ def debrief_call(flight: Flight, mission: Mission, award=None) -> str:
     if flight.status == "landed":
         if award is not None and award.mission.key == mission.key and award.medal == "GOLD" and award.improved:
             # A daily's name carries its date: the base is named for its manner alone.
-            base = (mission.name.split(" ", 1)[0] if any(ch.isdigit() for ch in mission.name)
-                    else mission.name).title() + " Base"
+            name = mission.name.removesuffix(" IFR")
+            base = (name.split(" ", 1)[0] if any(ch.isdigit() for ch in name) else name).title() + " Base"
             call = f"Houston, {base} here. The Eagle has landed."
             return call if len(call) <= 56 else f"{base} here. The Eagle has landed."
         if flight.fuel < .1 * flight.initial_fuel:
@@ -2707,6 +2730,7 @@ class Deck:
     ghost_choice: str = ""
     rivals: dict = field(default_factory=dict)
     tour: dict | None = None
+    ifr: bool = False
 
 
 def full_card(height: int) -> bool:
@@ -3314,7 +3338,9 @@ class Display:
                 c.text(lx + 24, row, "free", 9, bg)
         # The briefing.
         told = 2 if compact else 3  # lines of description
-        c.text(rx, top, plain(mission.name, rw), 5, PANEL)
+        c.text(rx, top, plain(mission.name, rw - 8), 5, PANEL)
+        if mission.difficulty and not program_tab:
+            c.rich(rx + rw - 7, top, [("[I] ", 9), ("IFR", 8 if deck.ifr else 9)], PANEL)
         for n, line in enumerate(textwrap.wrap(mission.description, rw)[:told]):
             c.text(rx, top + 1 + n, line, 7, PANEL)
         stats = (("PAD", f"{mission.width:.0f} m"), ("FUEL", f"{mission.fuel:.0f} kg"),
@@ -3326,7 +3352,7 @@ class Display:
         if program_tab:
             self.program_briefing(c, view, mission, rx, rw, stats_row + 2, compact)
         elif mission.difficulty:
-            best = deck.bests.get(mission.key, 0)
+            best = deck.bests.get(mission.key + IFR if deck.ifr else mission.key, 0)
             earned = medal(mission, best)
             c.rich(rx, stats_row + 2, [("TODAY " if daily else "BEST ", 9)] +
                    ([(f"{best} pts ", 6), (earned, MEDAL_COLORS[earned][1])] if earned else [("not landed yet", 9)]),
@@ -3652,6 +3678,8 @@ class Display:
             middle = round(((ahead.left + ahead.right) / 2 - left) / (metres / across))
             if 0 <= middle < px_w and view_y <= pad_label_row < view_y + view_h:
                 c.text(max(0, middle // across - 2), pad_label_row, f"PAD {n}", 9, None)
+        if mission.key.endswith(IFR):
+            self.instrument_panel(c, flight, altitude, view_y, view_h)
         alarm = self.fuel_warning(c, flight, view_y + 1)
         self.radio(c, flight, altitude, view_y + 2)
         self.instruments(c, flight, mission, altitude, span, remaining, slow, alarm)
@@ -3676,6 +3704,45 @@ class Display:
             color = (255, 186, 60) if level == 1 else rgb(8)
             c.text(max(0, (c.width - len(text) - 4) // 2), row, f"  {text}  ", (16, 12, 22), color)
         return level >= 2 and lit
+
+    def instrument_panel(self, c: Canvas, flight: Flight, altitude: float, top: int, rows: int):
+        """No window: a radar altimeter, the pad's bearing and a cross-pointer for
+        drift and sink, as the LM's crews had in the last metres of their dust."""
+        width, dark = c.width, (8, 10, 18)
+        c.fill(0, top, width, rows, dark)
+        middle = top + rows // 2
+        unicode = self.host.unicode
+        c.text(max(0, (width - 19) // 2), top + 3, "INSTRUMENT APPROACH", 9, dark)
+        c.rich(4, middle - 3, [("RADAR ALT ", 9), (f"{altitude:7.1f} m", 6)], dark)
+        c.rich(4, middle - 2, [("SINK      ", 9), (f"{flight.vy:+7.1f} m/s", 8 if abs(flight.vy) > 3 else 6)], dark)
+        # The pad's bearing: a strip 500 m wide, centred on the craft.
+        pad = flight.terrain.pad
+        strip = max(20, min(61, width - 30)) // 2 * 2 + 1
+        metres = 500 / strip
+        cells = ["-"] * strip
+        for n in range(strip):
+            x = flight.x + (n - strip // 2) * metres
+            if pad.left <= x <= pad.right:
+                cells[n] = "="
+        cells[strip // 2] = "^"
+        c.text(4, middle + 1, "PAD", 9, dark)
+        c.text(8, middle + 1, "".join(cells), 6, dark)
+        offset = (pad.left + pad.right) / 2 - flight.x
+        c.text(8, middle + 2, f"{abs(offset):.0f} m {'right' if offset > 0 else 'left'}" if abs(offset) >= 1
+               else "over the pad", 9, dark)
+        # The cross-pointer: drift across, sink down; the box's edge is the landing limit.
+        box_x, box_y = width - 18, middle - 3
+        if box_x > strip + 10:
+            for row in range(7):
+                c.text(box_x, box_y + row, "|" + " " * 13 + "|", 9, dark)
+            c.text(box_x, box_y - 1, "+" + "-" * 13 + "+", 9, dark)
+            c.text(box_x, box_y + 7, "+" + "-" * 13 + "+", 9, dark)
+            c.text(box_x + 7, box_y + 3, "+", 9, dark)
+            px = box_x + 7 + max(-6, min(6, round(flight.vx / 2 * 6)))
+            py = box_y + 3 + max(-3, min(3, round(-flight.vy / 3 * 3)))
+            inside = abs(flight.vx) <= 2 and abs(flight.vy) <= 3
+            c.text(px, py, "●" if unicode else "o", 6 if inside else 8, dark)
+            c.text(box_x + 1, box_y + 8, "DRIFT / SINK", 9, dark)
 
     def radio(self, c: Canvas, flight: Flight, altitude: float, row: int):
         """A radio call under the fuel chip: the fuel counting down as each alert
@@ -3823,7 +3890,7 @@ class Announcer:
         if award.promoted:
             self.event("rank", award.promoted.title())
         if award.medal == "GOLD" and award.improved:
-            self.event("achievement", "Gold landing: " + award.mission.name.title())
+            self.event("achievement", "Gold landing: " + mission_title(award.mission))
         self.standings(catalog)
 
     def achievements(self, keys):
@@ -3903,6 +3970,7 @@ class Game:
         # Ghosts: which to fly beside ("mine", "best" or "off"), the one in
         # flight, and a leader's run being watched.
         self.ghost_mode = "mine"
+        self.ifr = False  # the next ranked flight on instruments alone
         self.ghost: Ghost | None = None
         self.replay: Ghost | None = None
         self.replay_age = 0.0
@@ -4079,6 +4147,7 @@ class Game:
     def fly_tour(self):
         """Launch the tour's next mission, choosing it in the flight director too."""
         upcoming = self.tour_next()
+        self.ifr = False  # a tour is flown with the window open
         for n, chapter in enumerate(CHAPTERS):
             shelf = chapter_missions(chapter, self.missions)
             if upcoming in shelf:
@@ -4224,8 +4293,10 @@ class Game:
         self.refresh_daily()
         self.kind = kind
         self.unlocked = []
+        if self.ifr and not kind and self.mission.difficulty:
+            self.mission = on_instruments(self.mission)
         self.flight = (flown or self.mission).launch()
-        self.ghost = None if kind else self.load_ghost()
+        self.ghost = None if kind or self.mission.key.endswith(IFR) else self.load_ghost()
         self.mode = "launch" if self.scenes else "flying"
         self.scene_age = self.accumulator = 0
         self.record_note = self.ranking_note()
@@ -4349,6 +4420,9 @@ class Game:
                 return False
             self.select()
             return True
+        if self.mode == "menu" and key == "i" and self.mission.difficulty and not self.on_program_tab():
+            self.ifr = not self.ifr
+            return True
         if self.mode == "menu" and key == "g" and self.records is not None and self.mission.difficulty:
             # A rival's run joins the choices on the missions where one passed you.
             order = ("mine", "rival", "best", "off") if self.rival() else ("mine", "best", "off")
@@ -4368,7 +4442,8 @@ class Game:
             self.standings = []
             if self.records and self.mission.difficulty:
                 try:
-                    self.standings = self.records.top(self.host, self.mission)
+                    self.standings = self.records.top(self.host, on_instruments(self.mission) if self.ifr
+                                                      else self.mission)
                 except sqlite3.Error as exc:
                     self.record_note = "Records unavailable; ask your SysOp to check storage."
                     print("Lunar Lander records: " + plain(str(exc), 160), file=sys.stderr)
@@ -4443,8 +4518,7 @@ class Game:
             else:
                 self.mode, self.kind = "menu", ""
                 self.refresh_daily()
-                self.flight = self.mission.launch()
-                self.record_note = self.ranking_note()
+                self.select()
             return True
         if self.mode == "flying":
             self.flight.command(key)
@@ -4646,7 +4720,7 @@ def run(host: Host, started: float) -> int:
                                                              "replay" if replay else game.kind,
                                                              game.program_view(), replay or game.ghost,
                                                              game.ghost_choice() if game.mode == "menu" else "",
-                                                             game.live_rivals(), game.tour_view()))
+                                                             game.live_rivals(), game.tour_view(), game.ifr))
                     terminal.write(display.encode(frame))
                     # Flight and scenes move at 10 fps. A card only changes when a key
                     # arrives (which redraws at once) or a countdown ticks, and the
