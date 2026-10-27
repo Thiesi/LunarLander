@@ -24,7 +24,7 @@ class CardTests(unittest.TestCase):
                     self.assertNotIn(label, instruments)
 
     def test_a_card_that_misses_the_instruments_leaves_them(self):
-        # The flight director is compact below 33 rows, so the cockpit shows whole beneath it.
+        # The flight director is compact below 31 rows, so the cockpit shows whole beneath it.
         for mode, size in (("paused", (80, 24)), ("scores", (80, 24)), ("menu", (80, 24)), ("menu", (80, 30)),
                            ("help", (132, 50)), ("menu", (132, 50))):
             with self.subTest(mode=mode, size=size):
@@ -47,8 +47,8 @@ class CardTests(unittest.TestCase):
 
 
 class CompactMenuTests(unittest.TestCase):
-    def test_compact_below_33_rows_full_above(self):
-        for height, rows in ((24, 15), (32, 15), (33, 20), (50, 20)):
+    def test_compact_below_31_rows_full_above(self):
+        for height, rows in ((24, 15), (30, 15), (31, 18), (50, 18)):
             with self.subTest(height=height):
                 display = ll.Display(ll.Host(80, height))
                 x, y, width, card = display.menu_box(ll.Canvas(80, height))
