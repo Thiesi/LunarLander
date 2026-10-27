@@ -1,8 +1,21 @@
 # Release acceptance
 
-Target: `v0.7.2`. It is not a claim that every NetBBS transport or target
+Target: `v0.7.3`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
+
+## v0.7.3: a slimmer flight director
+
+- Playtest feedback: the full flight director drops its "In flight" and
+  "Touchdown" lines, which the instruments below show at every size (the
+  compact card never had them). The card is 18 rows, not 20, so it fits from
+  31 rows, not 33; the Pilot Record shares it and shows 13 lines at a time
+  (#92).
+- 248 tests (unittest). Hosted CI with the real NetBBS 7.40.0 runtime on
+  Linux and Windows passed on the release commit. Saved data is unchanged
+  from v0.6.0 (schema 3); no new settings.
+- Field check: on a 31- or 32-row terminal the full card clears the
+  instruments.
 
 ## v0.7.2: time to read
 
