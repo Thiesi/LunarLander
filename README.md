@@ -260,6 +260,24 @@ or `--gif` for an animation). The game's design is in
 [docs/design.md](docs/design.md), and the acceptance evidence and remaining
 field checks are in [docs/acceptance.md](docs/acceptance.md).
 
+### Local disk hygiene
+
+Unbounded scratch, a new folder for every run that nothing deleted, once grew
+to several million files on the development host and took it down. These
+rules keep this repo's share bounded:
+
+- Each kind of output reuses one fixed folder under `.task/` (for example
+  `.task/native-acceptance`), never a new folder per run. Tests use
+  `tempfile.TemporaryDirectory` with `with` or `addCleanup`, never `mkdtemp`,
+  `mkstemp` or `delete=False`; `tests/test_disk_hygiene.py` enforces this.
+- The temp folder and `.task/` are not storage. Commit evidence worth keeping
+  under `docs/` or attach it to the PR.
+- The suite fails when `.task`, `.test-tmp` and `.pytest_cache` hold more than
+  50,000 files. `python scripts/clean_scratch.py` removes the caches;
+  `--report` counts files per worktree and in the temp folder.
+- Use one worktree per active branch, and `git worktree remove` it when its PR
+  merges. Run the full suite one at a time, and keep repos out of OneDrive.
+
 ## Releases
 
 Releases are tagged by hand once CI passes on the release commit.

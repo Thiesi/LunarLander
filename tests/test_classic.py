@@ -24,10 +24,16 @@ def doorsys(graphics="GR", rows=25, minutes=30, user=23, alias="Ace"):
     return "\n".join(lines) + "\n"
 
 
+def scratch_folder(test):
+    """A temp folder removed when the test ends (mkdtemp alone leaks one per run)."""
+    directory = tempfile.TemporaryDirectory()
+    test.addCleanup(directory.cleanup)
+    return Path(directory.name)
+
+
 class DropFileTests(unittest.TestCase):
     def write(self, name, text):
-        directory = tempfile.mkdtemp()
-        path = Path(directory) / name
+        path = scratch_folder(self) / name
         path.write_bytes(text.encode("cp437"))
         return path
 
@@ -58,7 +64,7 @@ class DropFileTests(unittest.TestCase):
 
 class ClassicHostTests(unittest.TestCase):
     def host(self, text, name="DOOR32.SYS", **kwargs):
-        path = Path(tempfile.mkdtemp()) / name
+        path = scratch_folder(self) / name
         path.write_bytes(text.encode("cp437"))
         return ll.Host.classic(str(path), **kwargs)
 
