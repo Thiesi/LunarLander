@@ -93,19 +93,29 @@ class PresentationTests(unittest.TestCase):
 
     def test_thrust_tilt_and_threshold_colors(self):
         flight = ll.training()
-        flight.angle, flight.throttle = 30, .7
+        flight.angle, flight.throttle = 10, .7
         canvas = ll.Display(ll.Host()).draw(flight)
-        row = canvas.cells[21]
-        text = "".join(cell[0] for cell in row)
-        for value, color in (("70%", 5), ("+30", 12), ("3", 6), ("2", 5), ("10", 12)):
-            start = text.index(value, text.index("LAND") if value in ("3", "2", "10") else 0)
+        # The readings under their labels, and the touchdown limits set into the labels' rule.
+        labels, readings = (canvas.cells[canvas.height - ll.PANEL_ROWS + n] for n in (0, 1))
+        for row, value, color, after in ((readings, "70%", 5, ""), (readings, "+10", 12, ""),
+                                         (labels, "3", 6, "VERTICAL"), (labels, "2", 6, "DRIFT"),
+                                         (labels, "10", 12, "TILT")):
+            text = "".join(cell[0] for cell in row)
+            start = text.index(value, text.index(after))
             self.assertTrue(all(cell[1] == color for cell in row[start:start + len(value)]), (value, row))
+        # Past its limit a reading turns red and says so.
+        flight.angle = 30
+        row = ll.Display(ll.Host()).draw(flight).cells[canvas.height - ll.PANEL_ROWS + 1]
+        text = "".join(cell[0] for cell in row)
+        self.assertIn("+30", text)
+        self.assertIn("STEEP", text)
+        self.assertEqual(row[text.index("+30")][1], 8)
 
     def test_unsafe_speeds_are_named_not_only_colored(self):
         flight = ll.training()
         flight.vy, flight.vx, flight.fuel = -6, 3, 5
         canvas = ll.Display(ll.Host()).draw(flight)
-        values = "".join(cell[0] for cell in canvas.cells[19])
+        values = "".join(cell[0] for cell in canvas.cells[canvas.height - ll.PANEL_ROWS + 1])
         for word in ("FAST", "WIDE", "LOW"):
             self.assertIn(word, values)
 
@@ -247,7 +257,7 @@ class PlaytestFindingTests(unittest.TestCase):
 
     def test_cursor_keys_are_advertised(self):
         for unicode, tilt, thrust in ((True, "←→", "↑↓"), (False, "<>", "^v")):
-            for mode in ("flying", "menu", "help"):
+            for mode in ("flying", "help"):  # the cockpit and the manual; the flight director has only its own keys
                 with self.subTest(unicode=unicode, mode=mode):
                     text = " ".join(self.rows(ll.Display(ll.Host(unicode=unicode)).draw(ll.training(), mode)))
                     self.assertIn(f"A/D {tilt}", text)

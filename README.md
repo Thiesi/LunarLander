@@ -92,18 +92,37 @@ itself.
   landed it, when and how well.
 - **Descent trace:** the debrief draws altitude over the burn, so you can see
   where the fuel went, and says so when most of it went early.
+- **Cockpit:** one header row, the view, and a strip of six instruments:
+  altitude, vertical speed, drift, tilt, thrust and fuel, each a reading over a
+  row of lamps. Speed, drift and tilt carry their touchdown limits and say
+  FAST, WIDE or STEEP past them. The view shows the craft's shadow as it comes
+  down, a bar for what a hundred metres is at the current zoom, and which way
+  the pad lies when it is out of the window. Below 30 m it closes in to a
+  200 m window, and two marks on the ground show where the feet really are:
+  the craft is drawn larger than life, and a landing needs both on the pad.
+- **Training aids:** the training basin and a Cadet program's simulator show
+  the flight path ahead (where the craft goes if the controls stay as they
+  are, and how fast it would come down); nothing that is scored does. A
+  pilot's very first flight is told which key lights the engine.
+- **Debrief:** each touchdown reading against its limit, the descent trace, and
+  for a ranked landing where the score sits between the medals and what it was
+  made of: the landing, the fuel kept, how soft and how steady.
 - **Presentation:** scenery in quadrant blocks, two pixels across each cell, with
-  stars, a distant Earth and parallax ranges; a title splash with a rotating
-  tagline; and skippable ignition, touchdown and crash scenes. Truecolor, 256-
-  and 16-color terminals, with Unicode or ASCII glyphs. There is more scenery at
-  132×50.
+  stars, a distant Earth, parallax ranges and ground lit from the left; a title
+  splash with a rotating tagline; skippable ignition, touchdown and crash
+  scenes; and a flight director that sits over the chosen mission's landing
+  site. Truecolor, 256- and 16-color terminals, with Unicode or ASCII glyphs:
+  the limited palettes draw the night in shade blocks between their own
+  colors, as ANSI art does. There is more scenery at 132×50.
 - **Records:** each pilot's best landing per mission, on per-mission
   leaderboards, for up to eight callers flying at once.
 
 The [132×50 cockpit](docs/images/cockpit-132x50.png), the
 [splash](docs/images/splash.gif), the [flight director](docs/images/menu-80x24.png),
-the [medal ceremony](docs/images/medal.gif) and the [promotion](docs/images/promotion.gif)
-are captured from the game's own renderer.
+the [debrief](docs/images/debrief-80x24.png), the [medal ceremony](docs/images/medal.gif)
+and the [promotion](docs/images/promotion.gif) are captured from the game's own
+renderer, as are the cockpit in [256](docs/images/cockpit-256.png) and
+[16 colors](docs/images/cockpit-16.png).
 
 ## Records
 
@@ -166,7 +185,9 @@ drop file stops the launch with a message on stderr, never naming the file.
   nodes: different BBSes' record numbers overlap. A shared guest account is one
   pilot; keep guests out, or accept that they share one record.
 - **Display:** 80 columns, with DOOR.SYS's page length or 24 rows; no live
-  resize. 16 colours unless `--color 256` or `--color truecolor`. CP437 output,
+  resize. 16 colours unless `--color 256` or `--color truecolor`, sent as every
+  ANSI-BBS terminal takes them: bold for a bright foreground and the eight
+  plain backgrounds, never the aixterm 90-97 and 100-107 codes. CP437 output,
   in half blocks, unless `--encoding utf-8`; match the host's bridge encoding to
   it. A caller without ANSI (DOOR32 emulation 0, DOOR.SYS `NG` or `7E`) is told
   the game needs an ANSI terminal and returned to the BBS.
@@ -255,8 +276,10 @@ python scripts/capture.py --output .task/flight.png   # a frame as ANSI and PNG 
 
 A change to a screen comes with captures: the tests can prove that a screen
 fits, never that it looks right. `scripts/capture.py` takes `--width`,
-`--height`, `--color`, `--ascii`, `--pixels` and `--mode` (menu, help, a scene,
-or `--gif` for an animation). The game's design is in
+`--height`, `--color`, `--ascii`, `--pixels`, `--altitude` and `--mode` (menu,
+help, debrief, a scene, or `--gif` for an animation). With `--color 256` or
+`--color 16` the picture is drawn from the palette codes the terminal is sent,
+its shade blocks as the eye mixes them. The game's design is in
 [docs/design.md](docs/design.md), and the acceptance evidence and remaining
 field checks are in [docs/acceptance.md](docs/acceptance.md).
 

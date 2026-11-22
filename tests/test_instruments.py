@@ -68,7 +68,7 @@ class InstrumentTests(unittest.TestCase):
             text = screen(canvas)
             for words in ("INSTRUMENT APPROACH", "RADAR ALT", "DRIFT / SINK", "FLIGHT TRANQUILITY IFR"):
                 self.assertIn(words, text)
-            top, bottom = 3, host.height - 7
+            top, bottom = ll.HEAD_ROWS, host.height - ll.PANEL_ROWS
             view = {cell[0] for row in canvas.cells[top:bottom] for cell in row}
             self.assertFalse(view & set(ll.QUADRANTS[1:]) - {"▀", "▄"} if host.unicode else set())
             display.encode(canvas)

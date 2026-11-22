@@ -222,6 +222,37 @@ and promotion scenes, and NetBBS game events for promotions, first golds and
 career standings. Chapters are data, and a mission carries its own gravity, so a
 later season or another world is new entries rather than new machinery.
 
+The presentation overhaul gives the view the room: one header row (what is
+flown, the clock, and the keys that leave the flight) and four rows of
+instruments (six gauges with their labels set in the rule, and the flight keys)
+leave 19 of 24 rows to the scenery, where there were 14. Speed, drift and tilt
+show their limits on the gauge and name a breach in a word. The flight director
+no longer covers a dimmed cockpit: it sits over the chosen mission's landing
+site, drawn whole under the card, with where the flight starts. The debrief
+shows each touchdown reading against its limit, the trace in color, and a
+ranked score between the medals and by its parts. Limited palettes get an
+art-directed reading instead of a nearest color: xterm-256 has next to no dark
+colors and sixteen colors have four greys and two blues, so the night's two
+families (indigo sky and far ranges; slate, rock and metal) go by tone, as shade
+blocks between two palette colors. In 256 colors those are a grey and a blue of
+one lightness, a tint with almost no grain; in sixteen, the ramps ANSI art has
+always used, with the one loud blue held to a quarter on black. Only flat
+scenery is shaded, never a card or text, and ASCII glyph mode stays flat.
+
+The craft is drawn larger than life: nine cells across at any zoom, on feet six
+metres apart. Close in (a third scale, 200 m, below 30 m) two marks on the
+ground show the feet at their true place, so "both feet on the pad" can be
+judged by eye. A craft is redrawn for each tilt rather than rotated as a
+picture: solid parts are mapped whole, legs are drawn again as lines between
+their turned ends, and windows, hatch and thrusters are always kept, each on a
+cell of its own. The drawing for a tilt is made once and kept. A flight path
+ahead is a training aid only (the training basin and a Cadet program's
+simulator): scored flights are judged from the same view every pilot has had.
+A classic BBS's sixteen colors use only what every ANSI terminal takes: the
+bold attribute for a bright foreground, ended by a reset, and eight
+backgrounds, a bright one turned into the block's foreground where the glyph
+can be turned inside out.
+
 Animations run at the existing 10 fps, obey host deadlines and consume their skip
 key. They never advance flight physics. Save a landing before celebrating it;
 unranked play and storage errors remain explicit. The eight-caller shipped

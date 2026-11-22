@@ -17,7 +17,7 @@ class FlightCallTests(unittest.TestCase):
         return flight
 
     def radio(self, display, flight):
-        return rows(display.draw(flight))[5]  # under the fuel chip
+        return rows(display.draw(flight))[ll.HEAD_ROWS + 3]  # under the fuel chip
 
     def test_quiet_while_high_with_fuel_to_spare(self):
         display, flight = ll.Display(ll.Host()), self.flight()
@@ -54,7 +54,7 @@ class FlightCallTests(unittest.TestCase):
         for host in (ll.Host(80, 24, "16", False), ll.Host(80, 24, "256", True, charset="cp437")):
             display, flight = ll.Display(host), self.flight(4)
             canvas = display.draw(flight)
-            self.assertIn('"10 seconds."', rows(canvas)[5])
+            self.assertIn('"10 seconds."', rows(canvas)[ll.HEAD_ROWS + 3])
             display.encode(canvas)  # every glyph has a byte
 
 
