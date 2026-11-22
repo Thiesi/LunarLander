@@ -319,7 +319,7 @@ class TiltTests(unittest.TestCase):
         return count
 
     def test_a_tilted_craft_stays_in_one_piece_with_its_windows(self):
-        for craft in ("lm", "altair", "hopper"):
+        for craft in ll.CRAFT:
             for size in ("small", "medium"):
                 for across in (1, 2):
                     upright = ll.lander_roles(0, 0, size=size, across=across, craft=craft)
@@ -332,8 +332,9 @@ class TiltTests(unittest.TestCase):
                                 self.assertEqual(self.pieces(roles), 1, "a leg or a pad came off")
                                 for role in set(upright.values()) & ll._KEPT:
                                     self.assertIn(role, roles.values())
-                                # About as many pixels as upright: nothing smeared out or lost.
-                                self.assertLess(abs(len(roles) - len(upright)), len(upright) * .25)
+                                # About as many pixels as upright: nothing smeared out or lost
+                                # (a slanting leg or boom takes more pixels once it lies level).
+                                self.assertLess(abs(len(roles) - len(upright)), len(upright) * .45)
 
     def test_a_leg_is_a_line_at_every_tilt(self):
         for across in (1, 2):
@@ -347,6 +348,28 @@ class TiltTests(unittest.TestCase):
                         self.assertTrue(any((x + dx, y + dy) in legs | hull for dx in (-1, 0, 1) for dy in (-1, 0, 1)
                                             if (dx, dy) != (0, 0)))
                     self.assertLessEqual(self.pieces(legs), 2)
+
+    def test_the_hand_drawn_frames_are_whole_and_mirror(self):
+        for (craft, size, across, angle), (rows, ox, oy) in ll._TILTED.items():
+            with self.subTest(craft=craft, across=across, angle=angle):
+                self.assertEqual(len({len(row) for row in rows}), 1)
+                upright = ll.lander_roles(0, 0, size=size, across=across, craft=craft)
+                right, left = (ll.lander_roles(a, 0, size=size, across=across, craft=craft) for a in (angle, -angle))
+                self.assertEqual(right, ll._sprite(rows, ox, oy))
+                self.assertEqual({(across - 1 - x, y): role for (x, y), role in left.items()}, right)
+                # The same parts as upright, give or take a pixel of each.
+                for role in set(upright.values()):
+                    was, now = (sum(1 for r in roles.values() if r == role) for roles in (upright, right))
+                    self.assertLessEqual(abs(now - was), max(2, was // 3), role)
+                # It leans the way the rule turns it: within a pixel or two of the same place.
+                ruled = ll.turned(dict(upright), angle, across)
+                for corner in (min, max):
+                    for axis in (0, 1):
+                        self.assertLessEqual(abs(corner(point[axis] for point in right)
+                                                 - corner(point[axis] for point in ruled)), across)
+                # The windows read left to right as they do upright: pane, glass, pane.
+                windows = "".join(role for row in rows for role in row if role in "Ww")
+                self.assertEqual(sorted(windows), sorted(role for role in upright.values() if role in "Ww"))
 
     def test_each_tilt_is_drawn_once(self):
         self.assertIs(ll._hull("lm", "small", 2, 20), ll._hull("lm", "small", 2, 20))
@@ -376,18 +399,41 @@ class CloseInTests(unittest.TestCase):
         display.draw(fresh)
         self.assertEqual(display._zoom, 200)
 
+    def marks(self, flight):
+        display = ll.Display(ll.Host())
+        for _ in range(40):
+            canvas = display.draw(flight, mission=ll.missions()[1])
+        return [sum(1 for row in canvas.cells for cell in row if color in cell[1:])
+                for color in (ll.FOOT_ON, ll.FOOT_OFF)]
+
     def test_the_feet_are_marked_where_they_really_are(self):
-        white = (255, 255, 255)
         for altitude, marked in ((12, True), (39, True), (60, False)):
             with self.subTest(altitude=altitude):
-                display, flight = ll.Display(ll.Host()), ll.training()
+                flight = ll.training()
                 flight.y = flight.terrain.pad.height + 3 + altitude
-                for _ in range(40):
-                    canvas = display.draw(flight, mission=ll.missions()[1])
-                marks = sum(1 for row in canvas.cells for cell in row if white in cell[1:])
-                self.assertEqual(marks > 0, marked)
+                on, off = self.marks(flight)
+                self.assertEqual(on > 0, marked)
+                self.assertEqual(off, 0)
                 if marked:
-                    self.assertLessEqual(marks, 2)  # two feet, a cell or two between them
+                    self.assertLessEqual(on, 2)  # two feet, a cell or two between them
+
+    def test_a_foot_off_the_pad_is_marked_red(self):
+        flight = ll.training()
+        pad = flight.terrain.pad
+        flight.y = pad.height + 3 + 12
+        # Astride the right edge: one foot on, one off. Clear of it: both off. Inside: both on.
+        for x, expected in ((pad.right, (True, True)), (pad.right + 20, (False, True)), (pad.left + 10, (True, False))):
+            with self.subTest(x=x):
+                flight.x = x
+                flight.y = flight.terrain.height(x) + 3 + 12
+                on, off = self.marks(flight)
+                self.assertEqual((on > 0, off > 0), expected)
+        # Any smooth site counts as the pad does.
+        site = ll.Pad(pad.right + 14, pad.right + 30, pad.height)
+        flight.x, flight.sites = pad.right + 22, (site,)
+        flight.y = flight.terrain.height(flight.x) + 3 + 12
+        on, off = self.marks(flight)
+        self.assertEqual((on > 0, off > 0), (True, False))
 
     def test_close_in_there_is_still_sky(self):
         mission = ll.missions()[1]

@@ -4,6 +4,40 @@ Target: `v0.8.0`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
 
+## Unreleased: after v0.8.0
+
+- The window holds still on the pad on the approach as well as close in, and
+  every change of scale takes under a second. One scripted 277-frame descent
+  at 80x24, bytes per frame after the first: truecolor 1,746 (v0.8.0 2,677,
+  v0.7.3 2,244), 256 colors 937 (1,403, 1,499), sixteen colors 463 (697,
+  924); at 132x50 truecolor 3,409 (5,721, 4,278). A craft more than 0.35 of
+  the window from the pad's middle is still followed.
+- The foot marks are white over the pad or another smooth site and red over
+  anything else, each set into its cell so no neighbour's color is averaged
+  into it. To try in play: it may make the pad's edge too easy to judge.
+- The LM at its flight size has hand-drawn frames for 10, 20 and 30 degrees,
+  both pixel grids. Turning by rule now joins whatever touched upright, so a
+  mast stays under its hatch; the Surveyor's panels sit on a boom and its
+  medium legs reach its body, and it is held to one piece at every tilt with
+  the rest of the fleet.
+- The leaderboard, the tour and program boards, the program presets and the
+  Pilot Record use the debrief's lamps: a score on its track, a lamp for each
+  mission, flights by how they ended. The viewer's own row keeps its lamps'
+  colors.
+- The scenes' ground is lit by its slope like the flight's. The postcard's
+  flag stands left of the craft, clear of the screen's edge, and its captions
+  sit a row lower so the pad stays in the picture.
+- ASCII glyphs: a sprite is laid in color and lettered over it.
+- A round-trip test reads each display's bytes back through a small ANSI
+  terminal and compares the screen with the one meant, frame after frame of
+  a flight and across every screen, for truecolor, 256 colors, sixteen on
+  NetBBS, sixteen on a classic BBS (bold and eight backgrounds) and ASCII.
+  v0.8.0's encoders passed it unchanged.
+- 299 tests (unittest), run locally on Windows with Python 3.14; hosted CI
+  has not been run on this change. Saved data and settings are unchanged.
+- The cockpit captures in `docs/images` are of a ranked mission (Tranquility),
+  not the training basin with its flight path.
+
 ## v0.8.0: the presentation overhaul
 
 - The cockpit is one header row, the view and four rows of instruments: 19

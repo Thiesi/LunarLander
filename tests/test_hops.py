@@ -150,7 +150,7 @@ class GameTests(unittest.TestCase):
         mission = hop()
         flight = mission.launch()
         display = ll.Display(ll.Host(132, 50))
-        flight.x, flight.y = (flight.terrain.pad.left + flight.pads[0].left) / 2, 120  # between, wide view
+        flight.x, flight.y = (flight.terrain.pad.left + flight.pads[0].left) / 2, 260  # between, wide view
         self.assertIn("PAD 2", screen(display.draw(flight, mission=mission)))
         settle(flight)
         text = screen(display.draw(flight, mission=mission))

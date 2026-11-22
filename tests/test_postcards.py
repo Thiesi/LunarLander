@@ -53,6 +53,21 @@ class PostcardTests(unittest.TestCase):
         self.assertEqual(min(dy for _, dy in flag), -9)
         self.assertEqual(max(dy for _, dy in flag), 0)
         self.assertEqual(max(dx for dx, _ in flag), 14)
+        # Flown the other way it is the same flag, left of its pole.
+        self.assertEqual({(-dx, dy): cell for (dx, dy), cell in ll.flag_sprite(2, -1).items()}, flag)
+
+    def test_the_flag_is_clear_of_the_craft_and_the_edge(self):
+        game = self.landed()
+        game.key("c")
+        cloth = (236, 238, 244)
+        for host in (ll.Host(80, 24), ll.Host(132, 50), ll.Host(80, 24, pixels="half")):
+            with self.subTest(size=(host.width, host.height), pixels=host.pixels):
+                deck = ll.Deck(game.chapter, game.bests, True, game.award, (), game.logbook())
+                canvas = ll.Display(host).draw(game.flight, "postcard", mission=game.mission, deck=deck)
+                columns = [x for row in canvas.cells for x, cell in enumerate(row) if cloth in cell[1:]]
+                self.assertTrue(columns)
+                self.assertGreater(min(columns), 2)
+                self.assertLess(max(columns), canvas.width * 2 // 3)
 
 
 if __name__ == "__main__":
