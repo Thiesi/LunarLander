@@ -42,7 +42,7 @@ are listed at the end. Earlier releases' evidence follows, newest first.
   a flight and across every screen, for truecolor, 256 colors, sixteen on
   NetBBS, sixteen on a classic BBS (bold and eight backgrounds) and ASCII.
   v0.8.0's encoders passed it unchanged.
-- 299 tests (unittest). Hosted CI with the real NetBBS 7.40.0 runtime on
+- 300 tests (unittest). Hosted CI with the real NetBBS 7.40.0 runtime on
   Linux and Windows passed on the release commit. Saved data is unchanged
   from v0.6.0 (schema 3); no new settings.
 - The cockpit captures in `docs/images` are of a ranked mission (Tranquility),
