@@ -4,6 +4,64 @@ Target: `v0.7.3`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
 
+## Unreleased: the presentation overhaul
+
+- The cockpit is one header row, the view and four rows of instruments: 19
+  rows of view at 80x24, where there were 14. Six gauges (altitude, vertical
+  speed, drift, tilt, thrust, fuel) as rows of lamps; the touchdown limits are
+  on the gauges and in their labels, and a breach is named (FAST, WIDE, STEEP).
+  FAST now means sinking too fast: a climb is not flagged. The view adds the
+  craft's shadow, the plume's light on the ground, a scale bar and a pointer to
+  a pad out of the window; the ground is lit by its slope.
+- The flight director and the Pilot Record sit over the chosen mission's
+  landing site instead of a dimmed cockpit; the flight keys are no longer on
+  that screen (they are on the cockpit and in the manual).
+- The debrief shows readings against their limits, the trace in color, and a
+  ranked score on a track between the medals and by its parts, which always
+  add up to the score. The crash scene leaves a smoking wreck; a lone chevron
+  turns gold; a promotion's captions keep a dark ground under the fireworks.
+- 256 and 16 colors: the night's colors go by tone, as shade blocks between
+  two palette colors, in place of the nearest color (which gave navy and teal
+  ranges in 256 colors and one grey for everything in sixteen). The chosen
+  row's bar is a palette role, blue in sixteen colors. Cells are compared by
+  palette code, so two colors that read as one no longer repaint a cell.
+- Cost, one scripted 277-frame descent at 80x24, bytes per frame after the
+  first: truecolor 2,677 (was 2,244), 256 colors 1,403 (was 1,499), sixteen
+  colors 697 (was 924); at 132x50 truecolor 5,721 (was 4,278). The taller
+  view and the change to the close scale cost bytes; comparing by palette
+  code saves them in the limited palettes. Close in, the window holds still
+  on the pad and the change of scale takes half the frames of the first one,
+  which keeps the last 30 m at about 2,700 bytes a frame in truecolor (1,200
+  before, when nothing changed scale there). Frame time on the development
+  host is unchanged within its noise.
+- Below 30 m the camera closes in to a third scale, 200 m across (entered at
+  30 m, left at 42 m; the 400 m scale is entered at 100 m and left at 120 m),
+  and two marks on the ground show where the feet really are. The ranges'
+  feet sink with the view there, so there is still sky over them.
+- A craft is redrawn for each tilt (solid parts mapped whole, legs drawn as
+  lines, windows, hatch and thrusters always kept) in place of a rotation by
+  majority vote, which broke legs and smeared windows at nine pixels. Tests
+  hold every craft in one piece with its windows at every tilt step, both
+  pixel grids and both flight sizes. The frames are made by rule and kept,
+  not drawn by hand.
+- Training aids: the training basin and a Cadet program's simulator show the
+  flight path ahead and the speed it would come down at; a pilot with no
+  flight on record is told which key lights the engine. Scored flights show
+  neither.
+- The manual gives the tilt of the craft in hand (15 degrees for the Surveyor,
+  5 for the Altair) where it said 10 for all.
+- Instrument landings: the radar altimeter in large figures, a cross-pointer
+  with the landing limits as a window on it, and the pad's bearing.
+- A classic BBS's sixteen colors are sent as bold for a bright foreground and
+  the eight plain backgrounds, never 90-97 or 100-107. SyncTERM's CTerm
+  reference lists 1 and 22 and says the bright codes have no effect unless a
+  mode is on (read from its published documentation, not tried on a host).
+- 293 tests (unittest), run locally on Windows with Python 3.14. Saved data
+  and settings are unchanged from v0.6.0 (schema 3).
+- Reviewed from renderer captures (`docs/images`), which mix a shade block's
+  two colors as a fine dot pattern does. Not seen in a live terminal: see the
+  field checks below.
+
 ## v0.7.3: a slimmer flight director
 
 - Playtest feedback: the full flight director drops its "In flight" and
@@ -268,6 +326,16 @@ note wrapping mid-phrase) is fixed in v0.1.0. These reports do not identify
 every transport, mission or recovery scenario; the following were not performed
 before release and remain open:
 
+- The presentation overhaul: shade blocks in real 256- and 16-color terminals
+  and fonts (do `░▒▓` read as tones or as noise, and do they join without
+  seams?); a terminal theme that recolors the sixteen colors; the header's
+  shortened key hints with a long BBS name; the gauge strip's `■` lamps in a
+  CP437 font; and a human pass over the taller view (does the craft's shadow
+  help or distract?), the close zoom and its foot marks (is the change of
+  scale at 30 m a help in the last seconds, or a jolt?), the tilted craft at
+  each step, and the training path (does it teach, or fly the basin for you?).
+- v0.8.0 classic hosts: bold-for-bright and eight backgrounds on a real
+  SyncTERM, NetRunner or DOS terminal (#13).
 - v0.2.0 quadrant blocks in a range of real terminal fonts: whether quadrant
   pieces join without seams. NetBBS's web terminal draws them itself.
 - v0.7.0: a human pass over the sample return, the rover rendezvous and the

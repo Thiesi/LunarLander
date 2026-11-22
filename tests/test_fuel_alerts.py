@@ -27,7 +27,7 @@ class FuelAlertTests(unittest.TestCase):
         canvas = None
         for _ in range(frames):
             canvas = display.draw(flight)
-        return rows(canvas)[4], canvas
+        return rows(canvas)[ll.HEAD_ROWS + 2], canvas
 
     def test_low_flashes_as_it_appears_then_holds(self):
         display, flight = ll.Display(ll.Host()), self.flight(14)
@@ -42,7 +42,7 @@ class FuelAlertTests(unittest.TestCase):
         for _ in range(12):
             row, canvas = self.chip(display, flight, 1)
             lit.append("FUEL CRITICAL" in row)
-            rules.add(canvas.cells[2][0][1])
+            rules.add(canvas.cells[canvas.height - ll.PANEL_ROWS][0][1])  # the instruments' rule
         self.assertTrue(any(lit) and not all(lit))
         self.assertIn(ll.rgb(8), rules)
         self.assertGreater(len(rules), 1)

@@ -175,6 +175,18 @@ they are off, the door draws that caller's scenery in half blocks. On an older
 NetBBS, set `DOOR_LL_PIXELS=half` in the profile environment to draw with half
 blocks for everyone, as releases up to v0.1.0 did.
 
+In 256 and 16 colors the scenery's flat areas are drawn as shade blocks
+(`░▒▓`) between two palette colors: neither palette has the dark indigo and
+slate a night scene is made of, and a shade of two colors does. The sixteen
+colors are assumed to be the usual ANSI ones; a terminal theme that recolors
+them recolors the scenery with them. ASCII glyph mode uses no shade blocks.
+
+A NetBBS caller's sixteen colors are sent with the aixterm bright codes
+(90-97, 100-107), which NetBBS's terminals take. A classic BBS caller's are
+sent as bold for a bright foreground with the eight plain backgrounds only:
+SyncTERM documents the bright codes as having no effect unless a mode of its
+own is on, and DOS-era ANSI drivers never had them.
+
 CP437 terminals such as SyncTERM have half blocks but no quadrants. When NetBBS
 tells the door the caller's character set (`charset` in the door metadata,
 [NetBBS #1557](https://github.com/Thiesi/NetBBS/issues/1557)), CP437 callers get

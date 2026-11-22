@@ -273,7 +273,7 @@ def drop_file_info(path: Path) -> dict:
 # width that it has. Its arrows, ► and • sit on control bytes, so they become text.
 CP437_GLYPHS = str.maketrans({
     "╭": "┌", "╮": "┐", "╰": "└", "╯": "┘", "━": "─", "┃": "│",
-    "←": "<", "→": ">", "↑": "^", "↓": "v", "►": ">", "▼": "v", "●": "∙",
+    "←": "<", "→": ">", "↑": "^", "↓": "v", "►": ">", "◄": "<", "▼": "v", "▲": "^", "●": "∙", "×": "x",
     "▘": "▀", "▝": "▀", "▖": "▄", "▗": "▄", "▚": "▀", "▞": "▀",
     "▛": "█", "▜": "█", "▙": "█", "▟": "█",
 })
@@ -744,6 +744,32 @@ class Flight:
         precision = min(max(0, 1 - abs(vy) / 3) + max(0, 1 - abs(vx) / 2)
                         for vy, vx in (self.touchdowns if self.ascent else (*self.touchdowns, (self.vy, self.vx))))
         return round(difficulty * (1000 + 500 * self.fuel / self.initial_fuel + 250 * precision))
+
+
+def forecast(flight: Flight, seconds: float = 40.0, dt: float = .1) -> tuple[list, bool]:
+    """Where the craft goes if the controls stay as they are: (x, y, vx, vy)
+    every `dt` seconds, and whether it comes down within `seconds`. A coarse
+    look ahead for a training aid, not the flight model: the engine's lag and
+    a hop's rest are left out, and it stops where the craft's feet would
+    meet the ground under its centre."""
+    x, y, vx, vy, fuel = flight.x, flight.y, flight.vx, flight.vy, flight.fuel
+    a = math.radians(flight.angle)
+    power = 0.0 if flight.overheated else flight.throttle
+    points = []
+    for _ in range(int(seconds / dt)):
+        burn = min(fuel, FUEL_FLOW * power * dt)
+        push = flight.thrust * (burn / (FUEL_FLOW * dt)) / (flight.dry_mass + (0 if flight.cooling else fuel))
+        fuel -= burn
+        vx += push * math.sin(a) * dt
+        vy += (push * math.cos(a) - flight.gravity) * dt
+        x += vx * dt
+        y += vy * dt
+        if not 3 < x < 997 or y > 800:
+            return points, False
+        points.append((x, y, vx, vy))
+        if y - 3 <= flight.terrain.height(x):
+            return points, True
+    return points, False
 
 
 def training() -> Flight:
@@ -1822,9 +1848,19 @@ COLORS = (
     ((45, 132, 174), 31, 94),     # 10 Earth
     ((196, 221, 217), 152, 97),   # 11 cloud
     ((183, 158, 235), 183, 95),  # 12 attitude / violet
+    ((34, 48, 82), 17, 34),       # 13 the chosen row or tab: a navy bar, blue in sixteen colors
 )
-PANEL, EDGE, HIGHLIGHT = 1, (104, 86, 52), (34, 48, 82)
+PANEL, EDGE, HIGHLIGHT = 1, (104, 86, 52), 13
 _CUBE = (0, 95, 135, 175, 215, 255)
+# The sixteen ANSI colors as a VGA card shows them, for judging what a mix of
+# two looks like; a terminal's own sixteen differ a little.
+_VGA = ((0, 0, 0), (170, 0, 0), (0, 170, 0), (170, 85, 0), (0, 0, 170), (170, 0, 170), (0, 170, 170),
+        (170, 170, 170), (85, 85, 85), (255, 85, 85), (85, 255, 85), (255, 255, 85), (85, 85, 255),
+        (255, 85, 255), (85, 255, 255), (255, 255, 255))
+# Shade blocks, a quarter, a half and three quarters foreground: between two
+# palette colors they give a limited palette the tones it lacks, the way ANSI
+# art always has. CP437 has all three.
+SHADES = "\u2591\u2592\u2593"
 
 
 def rgb(color) -> tuple[int, int, int]:
@@ -1840,65 +1876,236 @@ def scale(color, factor: float) -> tuple[int, int, int]:
     return tuple(max(0, min(255, round(c * factor))) for c in rgb(color))
 
 
+def _linear(value: float) -> float:
+    value /= 255
+    return value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4
+
+
+def _oklab(light) -> tuple[float, float, float]:
+    """Linear RGB as OKLab: distances there are close to what the eye sees, so
+    a dark indigo is not "nearest" to a loud navy or a teal."""
+    r, g, b = light
+    l = (.4122214708 * r + .5363325363 * g + .0514459929 * b) ** (1 / 3)
+    m = (.2119034982 * r + .6806995451 * g + .1073969566 * b) ** (1 / 3)
+    s = (.0883024619 * r + .2817188376 * g + .6299787005 * b) ** (1 / 3)
+    return (.2104542553 * l + .7936177850 * m - .0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + .4505937099 * s,
+            .0259040371 * l + .7827717662 * m - .8086757660 * s)
+
+
+def _gap(a, b, tint: float = 1.5) -> float:
+    """How far apart two OKLab colors look; a shift of hue counts a little more than one of tone."""
+    return math.sqrt((a[0] - b[0]) ** 2 + tint * tint * ((a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2))
+
+
+def _lightness(light) -> float:
+    """CIE L* (0..100) of a linear RGB color: how light it looks."""
+    y = .2126 * light[0] + .7152 * light[1] + .0722 * light[2]
+    return 116 * y ** (1 / 3) - 16 if y > .008856 else 903.3 * y
+
+
+def night(color: tuple[int, int, int]) -> str | None:
+    """Which of the night's two families a color belongs to: "blue" for the
+    indigo of the sky and the far ranges, "grey" for slate, rock and metal,
+    None for anything with a hue of its own (foil, fire, the Earth, a lamp)."""
+    high, low = max(color), min(color)
+    if high < 20 or (high - low) / high < .22:
+        return "grey"
+    r, g, b = color
+    if high != b or abs(g - r) > (b - low) * .4 or (high - low) / high > .7:
+        return None  # not blue; or teal, violet, or a blue too vivid for a night
+    return "blue" if (high - low) / high >= .4 else "grey"
+
+
+@lru_cache(maxsize=2)
+def _swatches(depth: str) -> tuple:
+    """A palette's colors: (code, RGB, linear RGB, OKLab, L*). Sixteen colors
+    are codes 0..15; xterm-256 is its cube and grey ramp, 16..255, the first
+    sixteen being whatever the terminal's theme says."""
+    if depth == "16":
+        colors = list(enumerate(_VGA))
+    else:
+        colors = [(16 + 36 * r + 6 * g + b, (_CUBE[r], _CUBE[g], _CUBE[b]))
+                  for r in range(6) for g in range(6) for b in range(6)]
+        colors += [(232 + level, (8 + level * 10,) * 3) for level in range(24)]
+    swatches = []
+    for code, color in colors:
+        light = tuple(_linear(c) for c in color)
+        swatches.append((code, color, light, _oklab(light), _lightness(light)))
+    return tuple(swatches)
+
+
+@lru_cache(maxsize=16384)
 def xterm256(color: tuple[int, int, int]) -> int:
-    """The nearest of the 6x6x6 cube, or of the grey ramp for a color that is grey:
-    a dark indigo is nearer a grey by distance, and the night sky went to ash that way."""
-    def nearest(value):
-        return min(range(6), key=lambda index: abs(_CUBE[index] - value))
+    """The xterm-256 color that looks most like `color`, by eye rather than by
+    channel: channel by channel a dark indigo is "nearest" to a teal."""
+    lab = _oklab(tuple(_linear(c) for c in color))
+    return min(_swatches("256"), key=lambda swatch: _gap(lab, swatch[3]))[0]
 
-    r, g, b = (nearest(c) for c in color)
-    cube = (_CUBE[r], _CUBE[g], _CUBE[b])
-    level = max(0, min(23, round((sum(color) / 3 - 8) / 10)))
-    grey = (8 + level * 10,) * 3
 
-    def distance(other):
-        return sum((x - y) ** 2 for x, y in zip(color, other))
+# Sixteen colors hold four greys and two blues. Between them, shade blocks
+# make a ramp of tones, lightest last: (glyph, foreground, background).
+_RAMPS16 = {
+    "grey": ((" ", 0, 0), ("░", 8, 0), ("▒", 8, 0), ("▓", 8, 0), ("█", 8, 0), ("░", 7, 8), ("▒", 7, 8),
+             ("▓", 7, 8), (" ", 0, 7), ("░", 15, 7), ("▒", 15, 7), ("▓", 15, 7), ("█", 15, 0)),
+    "blue": ((" ", 0, 0), ("░", 4, 0), ("▒", 4, 0), ("▓", 4, 0), (" ", 0, 4), ("░", 12, 4), ("▒", 12, 4),
+             ("▓", 12, 4), ("█", 12, 0)),
+}
 
-    if max(color) - min(color) < 24 and distance(grey) < distance(cube):
-        return 232 + level
-    return 16 + 36 * r + 6 * g + b
+
+def _mixed(glyph: str, fg, bg) -> tuple:
+    """The linear RGB a cell shows: a shade block is its two colors by area."""
+    share = {" ": 0.0, "░": .25, "▒": .5, "▓": .75, "█": 1.0}[glyph]
+    return tuple(x * share + y * (1 - share) for x, y in zip(fg, bg))
+
+
+@lru_cache(maxsize=2)
+def _ramp16(kind: str) -> tuple:
+    """A sixteen-color ramp with the L* of each step."""
+    light = [tuple(_linear(c) for c in color) for color in _VGA]
+    return tuple((_lightness(_mixed(glyph, light[fg], light[bg])), (glyph, fg, bg))
+                 for glyph, fg, bg in _RAMPS16[kind])
+
+
+def _hue(color: tuple[int, int, int]) -> float:
+    r, g, b = color
+    high, low = max(color), min(color)
+    if high == low:
+        return 0.0
+    if high == r:
+        return (60 * (g - b) / (high - low)) % 360
+    return 60 * (b - r) / (high - low) + 120 if high == g else 60 * (r - g) / (high - low) + 240
+
+
+def _family16(color: tuple[int, int, int]) -> str | None:
+    """A color's family in sixteen colors: the night's two, where "grey" also
+    takes whatever is too dim or too pale to carry its hue there (a shadow, an
+    ember, the pool of light under a pad), or None for a color with a hue."""
+    kind = night(color)
+    if kind is None:
+        high, low = max(color) / 255, min(color) / 255
+        if high < .3 or (190 <= _hue(color) < 300 and (high < .45 or (high - low) / high < .45)):
+            kind = "grey"
+    return kind
+
+
+def _tone16(color: tuple[int, int, int], kind: str) -> float:
+    """How light a night color is drawn in sixteen colors. The one blue there
+    is a loud one, so the indigo family sits lower on its ramp than it
+    measures: the sky stays black to near the horizon and a far range is a
+    quarter blue on black, never a field of it."""
+    tone = _lightness(tuple(_linear(c) for c in color))
+    return tone * .35 if kind == "blue" else tone
 
 
 def ansi16(color: tuple[int, int, int]) -> int:
-    """A color's sixteen-color reading by hue family rather than distance, as
-    Voidrunner reads its splash: by distance every slate ridge, dusk band and
-    pale flame lands on the same grey."""
-    r, g, b = (c / 255 for c in color)
-    high, low = max(r, g, b), min(r, g, b)
-    if high < 0.16:
-        return 0
-    if (high - low) / high < 0.22:
-        return 15 if high > 0.85 else 7 if high > 0.5 else 8
-    if high == r:
-        hue = (60 * (g - b) / (high - low)) % 360
-    elif high == g:
-        hue = 60 * (b - r) / (high - low) + 120
-    else:
-        hue = 60 * (r - g) / (high - low) + 240
-    # Night colors -- dim or greyish slate, indigo, violet -- are greys, not
-    # blue: as blue, a whole sky and every range turns into one loud field.
-    if 190 <= hue < 300 and (high < 0.45 or (high - low) / high < 0.35):
-        return 7 if high > 0.5 else 8 if high > 0.25 else 0
+    """A color's sixteen-color reading by family rather than distance: by
+    distance every slate ridge, dusk band and pale flame lands on one grey.
+    The night's colors go by tone: the greys to the nearest of the four, an
+    indigo to black, and to blue only where it is light, so the edge of a
+    shaded range is a dark line and never a blot of pure blue."""
+    kind = _family16(color)
+    if kind == "blue":
+        tone = _tone16(color, kind)
+        return 0 if tone < 10 else 4 if tone < 22 else 12
+    if kind == "grey":
+        tone = _tone16(color, kind)
+        solid = [(level, cell) for level, cell in _ramp16(kind) if cell[0] in " █"]
+        _, (glyph, fg, bg) = min(solid, key=lambda step: abs(step[0] - tone))
+        return fg if glyph == "█" else bg
+    hue, high = _hue(color), max(color) / 255
     if hue < 18 or hue >= 340:
         return 1 + (8 if high > 0.8 else 0)
     family = 3 if hue < 70 else 2 if hue < 160 else 6 if hue < 200 else 4 if hue < 265 else 5
     return family + (8 if high > 0.62 else 0)
 
 
+def code_of(color, depth: str) -> int:
+    """A palette role or an RGB color as a palette code in a limited depth."""
+    if not isinstance(color, int):
+        return xterm256(color) if depth == "256" else ansi16(color)
+    if depth == "256":
+        return COLORS[color][1]
+    code = COLORS[color][2]
+    return code - 30 if code < 90 else code - 82
+
+
+_BLUES256 = (17, 18, 19, 20, 60, 61, 62, 103, 104, 146)
+
+
+@lru_cache(maxsize=32768)
+def blend(bucket: tuple[int, int, int], depth: str) -> tuple:
+    """A flat cell of scenery in a limited palette: (glyph, foreground code,
+    background code). Limited palettes have next to no dark colors, and a night
+    scene is nothing else, so the night's two families go by tone instead: a
+    grey by its lightness alone, an indigo as a shade block of a grey and a
+    blue of one lightness, which tints the cell and barely shows its grain.
+    Sixteen colors shade between their four greys and two blues, as ANSI art
+    always has. Anything with a hue of its own takes its one nearest color.
+    `bucket` is the color in 32 steps a channel, so near colors share an answer."""
+    color = tuple(min(255, c * 8 + 4) for c in bucket)
+    kind = _family16(color) if depth == "16" else night(color)
+    light = tuple(_linear(c) for c in color)
+    tone = _lightness(light)
+    if depth == "16":
+        if kind is None:
+            code = ansi16(color)
+            # A bright color fills its cell as a block: terminals that know
+            # only eight backgrounds still show it.
+            return ("█", code, 0) if code >= 8 else (" ", 0, code)
+        tone = _tone16(color, kind)
+        return min(_ramp16(kind), key=lambda step: abs(step[0] - tone))[1]
+    if kind is None:
+        return " ", 0, xterm256(color)
+    swatches = {swatch[0]: swatch for swatch in _swatches("256")}
+    greys = sorted((swatches[code] for code in (16, *range(232, 256), 231)), key=lambda s: abs(s[4] - tone))
+    if kind == "grey":
+        return " ", 0, greys[0][0]
+    lab = _oklab(light)
+    blues = sorted((swatches[code] for code in _BLUES256), key=lambda s: abs(s[4] - tone))
+    best = None
+    for grey in greys[:2]:
+        for blue in blues[:2]:
+            for glyph in SHADES:
+                cost = _gap(lab, _oklab(_mixed(glyph, blue[2], grey[2])), 2.5)
+                if best is None or cost < best[0]:
+                    best = (cost, glyph, blue[0], grey[0])
+    return best[1:]
+
+
+# A block glyph with its two colors exchanged: for a terminal that has
+# bright colors only as foregrounds.
+_INVERSE = {"▀": "▄", "▄": "▀", "▌": "▐", "▐": "▌", "░": "▓", "▓": "░", "▒": "▒",
+            **{glyph: " ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"[15 - n] for n, glyph in enumerate(" ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█") if 0 < n < 15}}
+
+
+def eight_grounds(cell: tuple) -> tuple:
+    """A sixteen-color cell for a classic ANSI terminal, which has eight
+    background colors: a bright ground becomes the block's foreground where
+    the glyph can be turned inside out, and its plain counterpart otherwise
+    (dark writing on amber is then dark writing on brown)."""
+    char, ink, paper = cell
+    if paper < 8:
+        return cell
+    if char in (" ", "█"):
+        return ("█", paper if char == " " else ink, 0)
+    if ink < 8 and char in _INVERSE:
+        return (_INVERSE[char], paper, ink)
+    return (char, ink, paper - 8)
+
+
+def _sgr_code(code: int, depth: str, background: bool) -> str:
+    if depth == "256":
+        return f"{48 if background else 38};5;{code}"
+    return str((40 if background else 30) + code if code < 8 else (100 if background else 90) + code - 8)
+
+
 @lru_cache(maxsize=16384)
 def _sgr_part(color, depth: str, background: bool) -> str:
-    base = 48 if background else 38
     if depth == "truecolor":
         r, g, b = rgb(color)
-        return f"{base};2;{r};{g};{b}"
-    if depth == "256":
-        return f"{base};5;{COLORS[color][1] if isinstance(color, int) else xterm256(color)}"
-    if isinstance(color, int):
-        code = COLORS[color][2]
-    else:
-        index = ansi16(color)
-        code = 30 + index if index < 8 else 90 + index - 8
-    return str(code + 10 if background else code)
+        return f"{48 if background else 38};2;{r};{g};{b}"
+    return _sgr_code(code_of(color, depth), depth, background)
 
 
 def sgr(foreground, background, depth: str) -> str:
@@ -1914,11 +2121,15 @@ class Canvas:
         # Reserve the last column as well as the terminal's bottom-right cell.
         self.width, self.height = max(1, width - 1), max(1, height)
         self.cells = [[(" ", 0, 0) for _ in range(self.width)] for _ in range(self.height)]
+        # Cells of scenery, laid by `blit`: where one is a single flat color, a
+        # limited palette may show it as a shade between two of its own.
+        self.soft = [bytearray(self.width) for _ in range(self.height)]
 
     def put(self, x: int, y: int, char: str, fg=7, bg=0):
         """`bg=None` keeps the color already under the cell: text over scenery."""
         if 0 <= x < self.width and 0 <= y < self.height:
             self.cells[y][x] = (char, fg, self.cells[y][x][2] if bg is None else bg)
+            self.soft[y][x] = 0
 
     def text(self, x: int, y: int, text: str, fg=7, bg=0):
         for char in plain(text, max(0, self.width - x)):
@@ -2058,6 +2269,8 @@ def sky(depth: float) -> tuple[int, int, int]:
 # Quadrant glyphs by which of a cell's four pixels take the foreground color:
 # 1 upper left, 2 upper right, 4 lower left, 8 lower right.
 QUADRANTS = " ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"
+# Glyphs that are pixels, not writing: a block the color of its ground is simply that color.
+PIXEL_GLYPHS = frozenset(QUADRANTS + SHADES)
 
 
 @lru_cache(maxsize=65536)
@@ -2090,11 +2303,14 @@ def blit(canvas: Canvas, pixels: list[list[tuple]], top: int = 0, left: int = 0,
         if not 0 <= y < canvas.height:
             continue
         upper, lower, cells = pixels[2 * row], pixels[2 * row + 1], canvas.cells[y]
+        count = min(len(upper) // across, canvas.width - left)
+        if count > 0:
+            canvas.soft[y][left:left + count] = b"\x01" * count
         if across == 2:
-            for x in range(min(len(upper) // 2, canvas.width - left)):
+            for x in range(count):
                 cells[left + x] = quadrant(upper[2 * x], upper[2 * x + 1], lower[2 * x], lower[2 * x + 1])
             continue
-        for x in range(min(len(upper), canvas.width - left)):
+        for x in range(count):
             a, b = upper[x], lower[x]
             if unicode:
                 cells[left + x] = (" ", 7, a) if a == b else ("▀", a, b)
@@ -2312,8 +2528,6 @@ CRAFT_SPRITES = {(craft, size, across): _sprite(rows if across == 1 else tuple("
                                                  {"small": 4, "medium": 6}[size] * across,
                                                  {"small": 5, "medium": 6}[size])
                  for craft, sizes in _CRAFT_ART.items() for size, rows in sizes.items() for across in (1, 2)}
-_SUBSAMPLES = tuple((dx, dy) for dy in (-1 / 3, 0, 1 / 3) for dx in (-1 / 3, 0, 1 / 3))
-_ROLE_RANK = {role: n for n, role in enumerate("WwFYOXGgoSsdhLPNnkARD")}
 
 
 FUEL_LOW_SECONDS, FUEL_CRITICAL_SECONDS = 30, 10
@@ -2545,46 +2759,101 @@ def descent_trace(flight: Flight, width: int, blocks: bool = True) -> list[str]:
 
 def lander_roles(angle: float, throttle: float = 0, phase: float = 0,
                  size: str = "small", across: int = 1, craft: str = "lm") -> dict[tuple[int, int], str]:
-    """Hull, legs and plume as roles, rotated together in square-pixel space.
-
-    Each target pixel takes the role most of its nine subsamples land on in the
-    upright sprite, so a tilted hull keeps its shape and has no holes, and a
-    symmetric hull stays mirror-symmetric when tilted. With `across` 2 the
-    pixels are half as wide (quadrants) and the craft is its fine art. Other
-    craft than the LM have their own art at the flight sizes."""
-    roles, _, start, reach_full = (LANDERS_FINE if across == 2 else LANDERS)[size]
-    roles = dict(CRAFT_SPRITES.get((craft, size, across), roles))
+    """Hull, legs and plume as roles at a tilt (see `turned`): the hull as it
+    is drawn for that tilt, the plume turned with it and under it. With
+    `across` 2 the pixels are half as wide (quadrants) and the craft is its
+    fine art. Other craft than the LM have their own art at the flight sizes."""
+    _, _, start, reach_full = (LANDERS_FINE if across == 2 else LANDERS)[size]
+    hull = _hull(craft, size, across, angle)
+    if throttle <= 0:
+        return dict(hull)
     # The plume's core and its flanks, in this grid's columns.
     core, flanks = ((0,), (-1, 1)) if across == 1 else ((0, 1), (-1, 2))
-    if throttle > 0:
-        flicker = int(phase * 20) % 3
-        length = 1 + size.count("l") + round(throttle * reach_full) + (flicker if size == "large" else flicker // 2)
-        for i in range(length):
-            heat = i / max(1, length - 1)
-            for x in core:
-                roles[(x, start + i)] = _FLAME[min(3, int(heat * 3.6))]
-            wide = heat < .55 if size != "small" else i == 0 and throttle > .55
-            if wide:
-                for x in flanks:
-                    roles[(x, start + i)] = _FLAME[min(3, int(heat * 3.6) + 1)]
-    if not angle:
-        return roles
+    plume = {}
+    flicker = int(phase * 20) % 3
+    length = 1 + size.count("l") + round(throttle * reach_full) + (flicker if size == "large" else flicker // 2)
+    for i in range(length):
+        heat = i / max(1, length - 1)
+        for x in core:
+            plume[(x, start + i)] = _FLAME[min(3, int(heat * 3.6))]
+        wide = heat < .55 if size != "small" else i == 0 and throttle > .55
+        if wide:
+            for x in flanks:
+                plume[(x, start + i)] = _FLAME[min(3, int(heat * 3.6) + 1)]
+    return {**(turned(plume, angle, across) if angle else plume), **hull}
+
+
+# A sprite is redrawn for each tilt the way one would draw it by hand. Legs and
+# foot pads are lines a pixel wide: drawn again between their turned ends, so a
+# leg never breaks. Windows, the hatch and the thrusters are single pixels that
+# say what the craft is: each is always kept. The rest is solid, mapped whole.
+_THIN, _KEPT = frozenset("LP"), frozenset("WwhR")
+
+
+def turned(roles: dict, angle: float, across: int = 1) -> dict:
+    """A sprite's roles turned by `angle` degrees about its centre. `across`
+    narrow pixels make one square pixel; a symmetric sprite stays mirror-symmetric."""
     a = math.radians(angle)
     cos, sin = math.cos(a), math.sin(a)
+    centre = (across - 1) / 2  # two across, the axis is between columns 0 and 1
+
+    def near(column: float) -> int:
+        """The nearest column, a tie going toward the axis, so both sides round alike."""
+        return math.floor(column + .5) if column < centre else math.ceil(column - .5)
+
+    def exact(x: int, y: int) -> tuple[float, float]:
+        u = _centre(x, across)
+        return (u * cos - y * sin + .5) * across - .5, u * sin + y * cos
+
+    def place(x: int, y: int) -> tuple[int, int]:
+        fx, fy = exact(x, y)
+        return near(fx), round(fy)
+
+    out = {}
     reach = math.ceil(max(math.hypot(_centre(x, across), y) for x, y in roles)) + 1
-    turned = {}
     for ty in range(-reach, reach + 1):
         for tx in range(-reach * across - across + 1, reach * across + across):
-            votes: dict[str | None, int] = {}
-            for dx, dy in _SUBSAMPLES:
-                sx, sy = _centre(tx + dx, across), ty + dy
-                u, v = sx * cos + sy * sin, -sx * sin + sy * cos
-                role = roles.get((round((u + .5) * across - .5), round(v)))
-                votes[role] = votes.get(role, 0) + 1
-            role = max(votes, key=lambda r: (votes[r], r is not None, -_ROLE_RANK.get(r, 99)))
-            if role:
-                turned[(tx, ty)] = role
-    return turned
+            sx = _centre(tx, across)
+            role = roles.get((near((sx * cos + ty * sin + .5) * across - .5), round(-sx * sin + ty * cos)))
+            if role and role not in _THIN:
+                out[(tx, ty)] = role
+    # Each kept pixel lands on a cell of its own: where two would share one,
+    # the later takes the free cell nearest to where it belongs.
+    pinned = set()
+    for (x, y), role in roles.items():
+        if role in _KEPT:
+            fx, fy = exact(x, y)
+            tx, ty = near(fx), round(fy)
+            spot = min(((tx + dx, ty + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+                        if (tx + dx, ty + dy) not in pinned),
+                       key=lambda cell: ((cell[0] - fx) / across) ** 2 + (cell[1] - fy) ** 2, default=(tx, ty))
+            pinned.add(spot)
+            out[spot] = role
+    for (x, y), role in roles.items():
+        if role not in _THIN:
+            continue
+        x0, y0 = place(x, y)
+        out.setdefault((x0, y0), role)
+        for dx, dy in ((1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1)):
+            other = roles.get((x + dx, y + dy))
+            # A line to each neighbour: once for a pair of leg pixels, and to
+            # the hull a leg hangs from, so it never comes away from it.
+            if other is None or (other in _THIN and (dx, dy) not in ((1, -1), (1, 0), (1, 1), (0, 1))):
+                continue
+            x1, y1 = place(x + dx, y + dy)
+            steps = max(abs(x1 - x0), abs(y1 - y0))
+            for n in range(1, steps):
+                out.setdefault((near(x0 + (x1 - x0) * n / steps), round(y0 + (y1 - y0) * n / steps)),
+                               other if other in _THIN and (y + dy, x + dx) > (y, x) else role)
+    return out
+
+
+@lru_cache(maxsize=512)
+def _hull(craft: str, size: str, across: int, angle: float) -> dict:
+    """A craft's hull and legs at one tilt: drawn once for each step it can be tilted to."""
+    roles = (LANDERS_FINE if across == 2 else LANDERS)[size][0]
+    roles = CRAFT_SPRITES.get((craft, size, across), roles)
+    return turned(roles, angle, across) if angle else dict(roles)
 
 
 def lander_sprite(angle: float, throttle: float = 0, phase: float = 0, size: str = "small",
@@ -2633,6 +2902,27 @@ def heat(level: float) -> tuple[int, int, int]:
         if level <= high:
             return mix(a, b, (level - low) / (high - low))
     return _HEAT[-1][1]
+
+
+def wreck_sprite(across: int = 1) -> dict:
+    """What a crash leaves on the pad: the hull on its side, scorched, about its centre."""
+    return {point: (mix(scale(color, .5), (38, 30, 36), .35), glyph)
+            for point, (color, glyph) in lander_sprite(52, 0, 0, "large", across).items()}
+
+
+def smoke(age: float, height: int, across: int = 1) -> dict:
+    """A thin column of smoke rising from a wreck, base at (0, 0): puffs that
+    drift and thin as they climb. A pure function of `age`."""
+    sprite = {}
+    for n in range(7):
+        rise = (age * 3.2 + n * height / 7) % height
+        fade = 1 - rise / height
+        x = round(math.sin(age * .7 + n * 1.9) * (1 + rise * .18) + rise * .25)
+        tone = mix((16, 16, 26), (104, 100, 110), fade * .8)
+        for dy in range(2 if fade > .5 else 1):
+            for k in range(across * (2 if fade > .35 else 1)):
+                sprite[(x * across + k, -round(rise) - dy)] = (tone, "~")
+    return sprite
 
 
 def explosion(age: float, radius: float, seed: int = 0, across: int = 1) -> dict:
@@ -2778,7 +3068,7 @@ def insignia(level: int, half: int, shown: float = 1.0, across: int = 1) -> dict
     for j in range(count):
         if j >= shown * count:
             break
-        fresh = j + 1 > shown * count - .5
+        fresh = shown < 1 and j + 1 > shown * count - .5
         for dx in range(-half * across, (half + 1) * across):
             top = -3 * j - round((half - abs(_centre(dx, across))) * .5)
             for dy, tone in ((0, (255, 236, 150)), (1, (226, 164, 44))):
@@ -3112,12 +3402,25 @@ class Deck:
     live: str = ""
 
 
+# The radar altimeter's figures, three strokes by five.
+_FIGURES = {"0": ("###", "#.#", "#.#", "#.#", "###"), "1": (".#.", "##.", ".#.", ".#.", "###"),
+            "2": ("###", "..#", "###", "#..", "###"), "3": ("###", "..#", "###", "..#", "###"),
+            "4": ("#.#", "#.#", "###", "..#", "..#"), "5": ("###", "#..", "###", "..#", "###"),
+            "6": ("###", "#..", "###", "#.#", "###"), "7": ("###", "..#", "..#", "..#", "..#"),
+            "8": ("###", "#.#", "###", "#.#", "###"), "9": ("###", "#.#", "###", "..#", "###"),
+            ".": (".", ".", ".", ".", "#")}
 CARD_ROWS = 18  # the full card's height; a compact one is 15
+# The cockpit: a header row, the view, and the instruments' four rows (their
+# labels on a rule, the readings, the gauges and the flight keys).
+HEAD_ROWS, PANEL_ROWS = 1, 4
+# A gauge's unlit track: a slate that sixteen colors show as dark grey, not black.
+TRACK = (50, 56, 76)
 
 
 def full_card(height: int) -> bool:
-    """Whether the full card clears the instruments, centred: from 31 rows."""
-    return max(1, (height - CARD_ROWS) // 2) + CARD_ROWS <= height - 7
+    """Whether the flight director is the full card: from 31 rows, where it
+    still leaves the landing site in view below it."""
+    return height >= 31
 
 
 def record_rows(height: int) -> int:
@@ -3195,6 +3498,16 @@ class Display:
         self.arrows = ("←→", "↑↓") if host.unicode else ("<>", "^v")
         self.back = "[Q] Return to " + host.bbs
         self.previous: list | None = None
+        # What each cell is sent as in a limited palette: by cell, and flat scenery by its color.
+        self._flat: dict = {}
+        self._soft: dict = {}
+        self._near: dict = {}
+        # A classic BBS's sixteen colors: bright foregrounds by the bold
+        # attribute and eight backgrounds, which every ANSI-BBS terminal has
+        # (SyncTERM takes the aixterm 90-97 and 100-107 only in a mode of its own).
+        self.classic = host.source == "classic" and host.color == "16"
+        # The camera's scale: 1000 m across, 400 m below 100 m, 200 m below 30 m.
+        self._zoom = 1000.0
         self.camera: tuple[float, float] | None = None
         self.frame = 0
         self.clock = time.monotonic  # for things taking turns; tests pin it
@@ -3212,16 +3525,63 @@ class Display:
         self.across = 2 if (host.unicode and host.pixels == "quad" and host.charset in (None, "utf-8")
                             and host.quadrants is not False) else 1
 
+    def wire(self, canvas: Canvas) -> list:
+        """The canvas as the terminal is sent it. In truecolor, the cells
+        themselves. In 256 or sixteen colors, each cell by palette code, flat
+        scenery blended from two where the palette has no such color."""
+        depth = self.host.color
+        if depth == "truecolor":
+            return canvas.cells
+        flat, soft, near, shades = self._flat, self._soft, self._near, self.host.unicode
+        classic = self.classic
+        rows = []
+        for cells, marks in zip(canvas.cells, canvas.soft):
+            row = []
+            for cell, mark in zip(cells, marks):
+                if mark and shades and cell[0] == " " and not isinstance(cell[2], int):
+                    bg = cell[2]
+                    sent = soft.get(bg)
+                    if sent is None:
+                        sent = blend((bg[0] >> 3, bg[1] >> 3, bg[2] >> 3), depth)
+                        sent = soft[bg] = eight_grounds(sent) if classic else sent
+                elif mark and shades and cell in near:
+                    sent = near[cell]
+                else:
+                    sent = flat.get(cell)
+                    if sent is None:
+                        char, fg, bg = cell
+                        ink, paper = 0 if char == " " else code_of(fg, depth), code_of(bg, depth)
+                        if ink == paper and depth == "16" and char not in PIXEL_GLYPHS:
+                            # Writing never vanishes into its ground: a dim label on black is dark grey.
+                            ink = {0: 8, 8: 7, 7: 8, 15: 7}.get(paper, 15)
+                        sent = (char, ink, paper)
+                        if classic:
+                            sent = eight_grounds(sent)
+                            if sent[1] == sent[2] and sent[0] not in PIXEL_GLYPHS:
+                                sent = (sent[0], {0: 8, 7: 15}.get(sent[2], 15 if sent[2] != 7 else 0), sent[2])
+                        if mark and shades and char in PIXEL_GLYPHS and not isinstance(fg, int)                                 and not isinstance(bg, int) and max(abs(a - b) for a, b in zip(fg, bg)) <= 14:
+                            # Two tones a step apart (a shaded face, a gradient) are one tone here.
+                            sent = blend(tuple((a + b) >> 4 for a, b in zip(fg, bg)), depth)
+                            sent = near[cell] = eight_grounds(sent) if classic else sent
+                        else:
+                            flat[cell] = sent
+                row.append(sent)
+            rows.append(row)
+        return rows
+
     def encode(self, canvas: Canvas) -> str:
         """Only changed cells: the cursor moves only across gaps and a color is
         set only when it changes. No scrolling, erase or clear on ordinary frames."""
         output = []
         previous = self.previous
-        if previous is None or len(previous) != len(canvas.cells) or len(previous[0]) != canvas.width:
+        cells = self.wire(canvas)
+        if previous is None or len(previous) != len(cells) or len(previous[0]) != canvas.width:
             previous = None
             output.append("\x1b[0m\x1b[2J")
         depth, style, cursor = self.host.color, None, None
-        for y, row in enumerate(canvas.cells):
+        part = _sgr_part if depth == "truecolor" else _sgr_code
+        classic = self.classic
+        for y, row in enumerate(cells):
             old = previous[y] if previous is not None else None
             for x, cell in enumerate(row):
                 if old is not None and cell == old[x]:
@@ -3231,21 +3591,40 @@ class Display:
                     continue
                 if cursor != (y, x):
                     output.append(f"\x1b[{y + 1};{x + 1}H")
-                if style is None:
-                    output.append(sgr(fg, bg, depth))
+                if classic:
+                    # Bold is the bright foreground, and only a reset is sure to end it.
+                    bold, ink, paper = style or (None, None, None)
+                    parts = []
+                    if char != " " and fg != ink:
+                        if bold is None or (bold and fg < 8):
+                            parts, bold, paper = ["0"], False, None
+                        if fg >= 8 and not bold:
+                            parts.append("1")
+                            bold = True
+                        parts.append(str(30 + fg % 8))
+                        ink = fg
+                    elif bold is None:
+                        parts, bold, paper = ["0"], False, None
+                    if bg != paper:
+                        parts.append(str(40 + bg))
+                    if parts:
+                        output.append("\x1b[" + ";".join(parts) + "m")
+                    style = (bold, ink, bg)
+                elif style is None:
+                    output.append(f"\x1b[{part(fg, depth, False)};{part(bg, depth, True)}m")
                     style = (fg, bg)
                 else:
                     parts = []
                     if char != " " and fg != style[0]:
-                        parts.append(_sgr_part(fg, depth, False))
+                        parts.append(part(fg, depth, False))
                     if bg != style[1]:
-                        parts.append(_sgr_part(bg, depth, True))
+                        parts.append(part(bg, depth, True))
                     if parts:
                         output.append("\x1b[" + ";".join(parts) + "m")
                     style = (fg if char != " " else style[0], bg)
                 output.append(char)
                 cursor = (y, x + (2 if unicodedata.east_asian_width(char) in "WF" else 1))
-        self.previous = canvas.cells
+        self.previous = cells
         return "".join(output)
 
     def turn(self, count: int) -> int:
@@ -3442,12 +3821,20 @@ class Display:
                 if t < .15:
                     sprites.append((lander_sprite(flight.angle, 0, t, "large", across), pad_c,
                                     ground - 3 + round(t * 20)))
+                else:
+                    # The wreck stays where it fell, under the fire and after it, and smokes.
+                    wreck_y = ground + 5
+                    sprites.append((above(wreck_sprite(across), wreck_y, pad_y), pad_c + across, wreck_y))
+                    if t > 1.1:
+                        sprites.append((smoke(t, max(10, h // 3), across), pad_c + 2 * across, pad_y - 7))
                 sprites.append((explosion(max(0.0, t - .1), max(6, cols // 12), across=across), pad_c, pad_y - 1))
                 # A scorch on the ground, once the fire has passed.
                 if t > .8:
-                    for x in range(pad_c - 7 * across, pad_c + 8 * across):
+                    for x in range(pad_c - 9 * across, pad_c + 10 * across):
                         if 0 <= x < w:
-                            pixels[pad_y][x] = scale(pixels[pad_y][x], .45 + .04 * abs(x - pad_c) / across)
+                            for below in (0, 1):
+                                pixels[pad_y + below][x] = scale(pixels[pad_y + below][x],
+                                                                 .4 + .05 * abs(x - pad_c) / across)
                 reason = plain(flight.reason or "Lander down.", cols - 4)
                 texts.append((rows - 4, max(1, (cols - len(reason)) // 2), [(reason, rgb(7))]))
             spaced = "  ".join(title)
@@ -3477,10 +3864,17 @@ class Display:
                        and st.sky_at(px, 2 * row + 1) for px in range(x * across, (x + 1) * across)),
                    top, left, shown)
         for row, col, parts in texts:
+            length = len(parts.removeprefix("annotated:")) if isinstance(parts, str) else \
+                sum(_cells(text) for text, _ in parts)
             if 2 * row >= st.far[min(w - 1, col * across)]:
-                length = len(parts.removeprefix("annotated:")) if isinstance(parts, str) else \
-                    sum(_cells(text) for text, _ in parts)
                 c.shade(left + col - 2, top + row, length + 4, 1, .4)
+            else:
+                # In the sky a caption needs no strip, unless something bright is behind it.
+                cells = c.cells[top + row]
+                for x in range(max(0, left + col - 1), min(c.width, left + col + length + 1)):
+                    char, fg, bg = cells[x]
+                    if max(max(rgb(bg)), max(rgb(fg)) if char != " " else 0) > 72:
+                        cells[x] = (" ", 7, scale(bg, .2) if max(rgb(bg)) <= 72 else (10, 12, 24))
             if isinstance(parts, str):
                 c.annotated(left + col, top + row, parts.removeprefix("annotated:"), None, cols - col - 1)
             else:
@@ -3504,16 +3898,18 @@ class Display:
             return c
         if mode in SCENE_SECONDS or mode == "postcard":
             return self.scene(c, mode, scene_age, flight, record_note, mission)
-        span = self.cockpit(c, flight, mission, remaining, slow)
         unicode = self.host.unicode
         if mode in ("menu", "record"):
-            self.clear_hud(c, *self.menu_box(c)[1::2])
-            c.dim()
+            # The flight director sits over the mission's landing site, which
+            # shows whole beneath it: no instruments, nothing to fly yet.
+            box = self.menu_box(c)
+            self.cockpit(c, flight, mission, remaining, slow, preview=box[1] + box[3])
             if mode == "menu":
                 self.menu(c, mission, catalog or missions(), record_note, clock_note)
             else:
                 self.record(c, catalog or missions())
             return c
+        self.cockpit(c, flight, mission, remaining, slow)
         lines, accent, mine = None, 5, None
         if mode == "paused":
             lines = ["FLIGHT PAUSED", "", "[P] Resume flight   [?] Manual", self.back, "",
@@ -3525,15 +3921,21 @@ class Display:
                      "This attempt will not be recorded.", "",
                      "[Y] Yes, return     [N] Keep flying"]
         elif mode == "help":
+            # The tilt a key gives is the craft's: the one in flight, or the one chosen for the next.
+            craft = mission.craft if mission.craft != "lm" else self.deck.craft
+            tilt = f"{CRAFT[craft][4]:.0f}"
             lines = ["FLIGHT MANUAL / A LITTLE THRUST GOES A LONG WAY", "",
+                     [("CONTROLS", 5)],
                      f"[W/S {self.arrows[1]}] Throttle +/-10%. Digits: [0] off to [9] full.",
-                     f"[A/D {self.arrows[0]}] Tilt +/-10 degrees. [X] Upright. [SPACE] Cut.",
+                     f"[A/D {self.arrows[0]}] Tilt +/-{tilt} degrees. [X] Upright. [SPACE] Cut.",
                      "Need to brake hard? [9] is full throttle at once.",
-                     "Controls stay set; you never need to hold two keys.", "",
+                     "Controls stay set; you never need to hold two keys.",
+                     [("LANDING", 5)],
                      "Burn early to slow descent. Tilt against your drift.",
                      "Watch VERTICAL: negative means falling toward the Moon.",
                      "Land with |vertical|<=3, |drift|<=2, |tilt|<=10.",
                      "Fuel alerts at 30 s, then 10 s of hover. Empty: coast.",
+                     [("SCORING", 5)],
                      "Score = difficulty x (1000 + 500 x fuel fraction",
                      "  + 250 x (1-|V|/3) + 250 x (1-|H|/2)).",
                      "Best per mission; tied scores rank earliest first.",
@@ -3547,20 +3949,30 @@ class Display:
             call = debrief_call(flight, mission, self.deck.award)
             call = f'CAPCOM: "{call}"' if len(call) <= 50 else f'"{call}"'
             touch_vy, touch_vx = flight.touchdown()
+            spent = ([("Thrusters at ", 7), (f"{thruster_heat(flight) * 100:.0f}%", 6), (" heat", 7)] if flight.cooling
+                     else [("Fuel remaining ", 7), (f"{flight.fuel:.1f}", 6), (" kg", 7)])
+            degree = "°" if unicode else " deg"
             lines = [("ASCENT / SAMPLES ABOARD" if flight.ascent else "CONTACT LIGHT / LANDED") if landed
                      else "SIGNAL LOST / LANDER DOWN",
-                     "", *((call,) if landed else (flight.reason, call)), "",
-                     f"Vertical {touch_vy:+.2f} m/s | Drift {touch_vx:+.2f} m/s | Tilt {flight.angle:+.0f}",
-                     (f"Thrusters at {thruster_heat(flight) * 100:.0f}% heat" if flight.cooling else
-                      f"Fuel remaining {flight.fuel:.1f} kg") + f" | Flight time {flight.elapsed:.1f}s", ""]
+                     "", *(([(call, (200, 222, 255))],) if landed else ([(flight.reason, 7)], [(call, (200, 222, 255))])),
+                     "",
+                     # Each reading against its touchdown limit: the bar's tick is the limit.
+                     self.reading("Vertical", f"{touch_vy:+.2f} m/s", abs(touch_vy) / 3) + [("   ", 7)] + spent,
+                     self.reading("Drift", f"{touch_vx:+.2f} m/s", abs(touch_vx) / 2)
+                     + [("   Flight time ", 7), (f"{flight.elapsed:.1f}", 6), ("s", 7)],
+                     self.reading("Tilt", f"{flight.angle:+.0f}{degree}", abs(flight.angle) / 10), ""]
             trace_at = len(lines) - 1
             award = self.deck.award
             if landed and award is not None and award.mission.key == mission.key:
-                # The score itself is in the record note below.
-                lines.append(f"{award.medal} MEDAL" + ("" if award.improved or award.medal == award.best
-                                                       else f" / your best here stays {award.best}"))
+                # The medal, where the score sits between the medals, and what it was made of.
+                metal = MEDAL_COLORS[award.medal][1] if award.medal else rgb(9)
+                lines.append([*medal_parts(award.medal, unicode), (f" {award.medal} MEDAL", metal),
+                              ("" if award.improved or award.medal == award.best
+                               else f" / your best here stays {award.best}", 9)])
+                lines.append(self.score_track(mission, award.score))
+                lines.append(self.score_parts(mission, flight, award.score))
                 ladder = award.career
-                lines.append(f"PROMOTED TO {award.promoted}" if award.promoted else
+                lines.append([(f"PROMOTED TO {award.promoted}", (255, 240, 200))] if award.promoted else
                              f"Rank {ladder.rank}: {ladder.points} medal points"
                              + (f", {ladder.next_at - ladder.points} to {ladder.next_rank}" if ladder.next_rank else ""))
             if self.deck.unlocked:
@@ -3572,7 +3984,8 @@ class Display:
                               (": ", 9), (shown.name, MEDAL_COLORS[shown.tier][1]), (f" ({shown.tier.lower()})", 9)])
                 lines.append([("  " + shown.hint, 7)])
             retry = {"real": "", "sim": "[R] Simulator again    "}.get(self.deck.kind, "[R] Retry    ")
-            if self.deck.kind == "sim" and self.deck.program and                     self.deck.program.runs_left(int(mission.key.rsplit("-", 1)[1])) == 0:
+            if self.deck.kind == "sim" and self.deck.program and \
+                    self.deck.program.runs_left(int(mission.key.rsplit("-", 1)[1])) == 0:
                 retry = ""
             keys = retry + ("[M] Program" if self.deck.kind else "[M] Mission briefing")
             tour = self.deck.tour
@@ -3583,19 +3996,26 @@ class Display:
                     and len(keys) + 16 <= 60:
                 keys += "    [C] Postcard"
             lines += [record_note or "Training flight / unranked", "", keys, self.back]
-            # The descent trace, where the card has room for it (not at 80x24 after a medal).
-            trace = descent_trace(flight, 55, unicode and self.host.charset in (None, "utf-8"))
-            while trace and len(lines) + len(trace) > c.height - 4:
+            # The room a card has on this screen, under the header.
+            room = c.height - HEAD_ROWS - 1
+            # The breakdown and the track are the first to go on a short screen.
+            for extra in ("score_parts", "score_track"):
+                if len(lines) > room - 2 and landed and award is not None and award.mission.key == mission.key:
+                    lines = [line for line in lines if not (isinstance(line, list) and line and line[0][0] ==
+                                                           {"score_parts": "", "score_track": "SCORE "}[extra])]
+            # The descent trace, where the card has room for it.
+            trace = self.trace_lines(flight)
+            while trace and len(lines) + len(trace) > room:
                 trace.pop()
             if len(trace) >= 2:
                 lines[trace_at:trace_at] = trace
             # What the real crew did, on a historic descent, where the card has room.
             told = history_line(mission, flight)
-            if told and len(lines) < c.height - 4:
+            if told and len(lines) < room:
                 lines.insert(trace_at, plain(told, 60))
             # Against the ghost: time and fuel, where the card has room.
             ghost = self.deck.ghost.flight if self.deck.ghost is not None else None
-            if landed and ghost is not None and ghost.status == "landed" and len(lines) < c.height - 4:
+            if landed and ghost is not None and ghost.status == "landed" and len(lines) < room:
                 seconds, kg = flight.elapsed - ghost.elapsed, flight.fuel - ghost.fuel
                 lines.insert(trace_at, f"Against the ghost: {abs(seconds):.1f} s "
                                        f"{'slower' if seconds > 0 else 'faster'}"
@@ -3660,14 +4080,21 @@ class Display:
             for i, (name, score, user) in enumerate(standings or [], 1):
                 if self.host.ranked and user == self.host.user:
                     mine = len(lines)
-                lines.append(f"{i:2}. {plain(name, 28):28} {score:6} pts  {medal(mission, score) or ''}")
+                earned = medal(mission, score)
+                lines.append([(f"{i:2}. ", 9), (f"{plain(name, 28):28} ", 7), (f"{score:6}", 6), (" pts  ", 9),
+                              *(medal_parts(earned, unicode) + [(" " + earned, MEDAL_COLORS[earned][1])]
+                                if earned else [])])
             if not standings:
                 lines.append(record_note or "No landings recorded for this mission yet.")
             lines += ["", "[W] Watch the leader    [B] or [ESC] Back to briefing" if standings
                       else "[B] or [ESC] Back to mission briefing"]
         if lines is not None:
             box_width = 66
-            x, y = (c.width - box_width) // 2, max(3, (c.height - len(lines) - 1) // 2)
+            # Centred on the view where it fits there, else on the screen.
+            y = max(HEAD_ROWS, (c.height - PANEL_ROWS + HEAD_ROWS - len(lines) - 1) // 2)
+            if y + len(lines) + 1 > c.height - PANEL_ROWS:
+                y = max(HEAD_ROWS, (c.height - len(lines) - 1) // 2)
+            x = (c.width - box_width) // 2
             self.clear_hud(c, y, len(lines) + 1)
             c.dim()
             c.panel(x, y, box_width, lines, unicode, accent)
@@ -3679,26 +4106,86 @@ class Display:
                     row[col] = (char, (255, 240, 200) if char != " " else fg, HIGHLIGHT)
         return c
 
+    def segments(self, length: int, lit: int, color, ticks: dict | None = None) -> list:
+        """A row of lamps as (text, color) parts: `lit` of `length` in `color`
+        (a color, or one for each lamp), with a limit's tick at each of `ticks`."""
+        on, off, tick = ("■", "■", "┃") if self.host.unicode else ("=", "-", "|")
+        parts = []
+        for n in range(length):
+            tint = (color(n) if callable(color) else color) if n < lit else TRACK
+            if ticks and n in ticks:
+                parts.append((tick, ticks[n]))
+            else:
+                parts.append((on if n < lit else off, tint))
+        return parts
+
+    def reading(self, label: str, value: str, share: float) -> list:
+        """A touchdown reading against its limit: twelve lamps, the eighth the
+        limit; within it they are cyan, past it red, and so is the number."""
+        over = share > 1
+        lit = 0 if share <= 0 else max(1, min(12, round(share * 8)))
+        return [(f"{label:<9}", 7), (f"{value:<11}", 8 if over else 6),
+                *self.segments(12, lit, lambda n: rgb(8) if over or n > 8 else rgb(6), {8: (150, 162, 190)})]
+
+    def score_track(self, mission: Mission, score: int) -> list:
+        """Where a score sits between a bare safe landing and a perfect one,
+        with the silver and gold lines marked in their metals."""
+        floor, length = 1000 * mission.difficulty, 36
+        share = max(0.0, min(1.0, (score - floor) / max(1, floor)))
+        earned = medal(mission, score)
+        ticks = {round((threshold / 1000 - 1) * length): MEDAL_COLORS[name][0]
+                 for name, threshold in MEDALS if name != "BRONZE"}
+        return [("SCORE ", 9), *self.segments(length, max(1, round(share * length)),
+                                              MEDAL_COLORS[earned][1] if earned else rgb(9), ticks),
+                (f" {score}", 6), (f" of {2 * floor}", 9)]
+
+    def score_parts(self, mission: Mission, flight: Flight, score: int) -> list:
+        """What a score was made of: the landing itself, the fuel kept, and how
+        soft and how steady the touchdown was. The first part is empty, which
+        is how the debrief knows this line."""
+        difficulty = mission.difficulty
+        downs = flight.touchdowns if flight.ascent else (*flight.touchdowns, (flight.vy, flight.vx))
+        vy, _ = min(downs, key=lambda down: max(0, 1 - abs(down[0]) / 3) + max(0, 1 - abs(down[1]) / 2))
+        base = 1000 * difficulty
+        fuel = round(difficulty * 500 * flight.fuel / flight.initial_fuel)
+        soft = round(difficulty * 250 * max(0, 1 - abs(vy) / 3))
+        steady = score - base - fuel - soft  # the last takes the rounding, so the parts add up
+        return [("", 9), ("      ", 9), (str(base), 6), (" landing  ", 9), (f"+{fuel}", 5), (" fuel  ", 9),
+                (f"+{soft}", 6), (" soft  ", 9), (f"+{steady}", 6), (" steady", 9)]
+
+    def trace_lines(self, flight: Flight) -> list:
+        """The descent trace as colored parts: altitude in the sky's blue, the
+        burn in the plume's colors by how hard it was, and the hint as it is."""
+        unicode = self.host.unicode and self.host.charset in (None, "utf-8")
+        ramp = "▁▂▃▄▅▆▇█" if unicode else " .:-=+*#"
+        lines = []
+        for line in descent_trace(flight, 54, unicode):
+            if line.startswith("ALT  "):
+                lines.append([("ALT  ", 9), (line[5:], (96, 140, 190))])
+            elif line.startswith("BURN "):
+                lines.append([("BURN ", 9)] + [(mark, mix((224, 96, 40), (255, 236, 170), max(0, ramp.find(mark)) / 7))
+                                                for mark in line[5:]])
+            else:
+                lines.append(line)
+        return lines
+
     def clear_hud(self, c: Canvas, y: int, height: int):
-        """Blank the header or the instrument panel when a card covers any of
-        its lines, edge to edge, so no gauge reads half-hidden beside the card
-        or loses its label; a block the card misses stays readable. A card
-        that only reaches a block's rule takes just the rule."""
-        covered = set(range(y, y + height + 1))  # and the row its shadow falls on
-        for text, rule in ((range(0, 2), 2), (range(c.height - 6, c.height), c.height - 7)):
-            rows = [*text, rule] if covered & set(text) else [rule] if rule in covered else []
-            for row in rows:
-                c.fill(0, row, c.width, 1)
+        """Blank the instruments when a card (or the row its shadow falls on)
+        covers any of their rows, edge to edge, so no gauge reads half-hidden
+        beside the card or loses its label; a card that misses them leaves
+        them readable."""
+        if y + height >= c.height - PANEL_ROWS:
+            c.fill(0, c.height - PANEL_ROWS, c.width, PANEL_ROWS)
 
     def menu_box(self, c: Canvas) -> tuple[int, int, int, int]:
         """The flight director's card, and the Pilot Record's: x, y, width and
-        height. Centred, the full card clears the instruments from 31 rows; on a
-        shorter screen a compact one sits under the header, its shadow on the
-        instruments' rule at most, and the whole cockpit shows below it."""
+        height. The full card from 31 rows, a third of the way down; on a
+        shorter screen a compact one right under the header. Either way the
+        mission's landing site shows below it."""
         box_w = min(76, c.width - 2)
         if full_card(c.height):
-            return (c.width - box_w) // 2, max(1, (c.height - CARD_ROWS) // 2), box_w, CARD_ROWS
-        return (c.width - box_w) // 2, 2, box_w, 15
+            return (c.width - box_w) // 2, max(HEAD_ROWS, (c.height - CARD_ROWS) // 3), box_w, CARD_ROWS
+        return (c.width - box_w) // 2, HEAD_ROWS, box_w, 15
 
     def rank_parts(self, ladder: Career) -> list:
         """The pilot's rank, a bar to the next, and the medal points."""
@@ -3717,7 +4204,7 @@ class Display:
         updown, sideways = self.arrows[1], self.arrows[0]
         x0, y0, box_w, box_h = self.menu_box(c)
         # Compact: no rules and a shorter briefing. Either way only the menu's own
-        # keys: the flight keys and touchdown limits are on the instruments below.
+        # keys: the flight keys and touchdown limits are on the cockpit's instruments and in the manual.
         compact = box_h < CARD_ROWS
         top = y0 + (3 if compact else 4)
         c.frame(x0, y0, box_w, box_h, "LUNAR LANDER / FLIGHT DIRECTOR", unicode)
@@ -3976,18 +4463,30 @@ class Display:
         columns = [left + x * step for x in range(width)]
         surface = [ground.height(wx) for wx in columns]
         ground_row = [row_of(s) for s in surface]
+        # The sun is low on the left: a slope that climbs to the right faces it
+        # and one that falls away is in shade, in a few flat tones so a hillside
+        # is one piece. `lean` is -2..2, measured across a cell or two.
+        reach_px = 2 * across
+        lean = []
+        for x in range(width):
+            rise = (surface[min(width - 1, x + reach_px)] - surface[max(0, x - reach_px)]) / (2 * reach_px * step)
+            lean.append(max(-2, min(2, round(rise / .22))))
         far_row, mid_row, far_light, mid_light = [], [], [], []
         reach, zoom = 3 * metres, metres * cells / 1000
+        # Close in, the ranges' feet sink with the view, so there is still sky over them.
+        foot = 60 * min(1.0, zoom * 2.5)
         for x, wx in enumerate(columns):
             # The far range drifts at a third of the camera's pace: parallax.
             fx = left * .35 + x * step
             # Heights scale with the view, so a range keeps its size on screen as the camera zooms.
-            far_row.append(row_of(60 + zoom * (105 + 75 * peaks(fx, 300, 7))))
+            far_row.append(row_of(foot + zoom * (105 + 75 * peaks(fx, 300, 7))))
             far_light.append(facing(zoom * 75 * (peaks(fx + reach, 300, 7) - peaks(fx - reach, 300, 7)) / (2 * reach)))
-            mid_row.append(row_of(60 + zoom * (20 + 55 * peaks(wx, 210, 11))))
+            mid_row.append(row_of(foot + zoom * (20 + 55 * peaks(wx, 210, 11))))
             mid_light.append(facing(zoom * 55 * (peaks(wx + reach, 210, 11) - peaks(wx - reach, 210, 11)) / (2 * reach)))
         sky_rows = [sky(r / max(1, view_h * .9)) for r in range(view_h)]
-        bands = ((118, 124, 142), (98, 104, 122), (80, 86, 104), (64, 68, 86), (50, 53, 70))
+        bands = ((122, 128, 146), (100, 106, 124), (82, 88, 106), (66, 70, 88), (52, 55, 72))
+        rims = ((110, 118, 136), (132, 140, 158), (168, 176, 190), (198, 204, 216), (222, 226, 234))
+        relief = (.7, .84, 1.0, 1.1, 1.2)
         pixels = []
         for py in range(px_h):
             world_y = top - py * metres
@@ -3997,14 +4496,15 @@ class Display:
                 if py >= g:
                     depth = surface[x] - world_y
                     if py == g:
-                        slope = surface[min(width - 1, x + 1)] - surface[max(0, x - 1)]
-                        lean = slope / (2 * step)
-                        color = (204, 210, 220) if lean > .25 else (164, 172, 186) if lean > -.25 else (118, 126, 142)
+                        color = rims[lean[x] + 2]
                     else:
                         band = 0 if depth < 6 else 1 if depth < 18 else 2 if depth < 40 else 3 if depth < 80 else 4
                         grain = _hash(int(columns[x] / 7), int(world_y / 9), 3)
                         band = max(0, band - 1) if grain < .035 else min(4, band + 1) if grain > .955 else band
                         color = bands[band]
+                        # The slope's light, fading into the body of the hill.
+                        if lean[x] and depth < 34:
+                            color = scale(color, relief[lean[x] + 2] if depth < 14 else (1 + relief[lean[x] + 2]) / 2)
                 elif py >= mid_row[x]:
                     color = range_color(py - mid_row[x], mid_light[x], True)
                 elif py >= far_row[x]:
@@ -4024,10 +4524,11 @@ class Display:
         for x in range(pad_left - 4 * across, pad_right + 4 * across + 1):
             if not 0 <= x < width:
                 continue
-            if 0 <= pad_row + 1 < px_h:
-                pixels[pad_row + 1][x] = mix(pixels[pad_row + 1][x], (60, 200, 220), .12)
+            for below, glow in ((1, .2), (2, .1)):
+                if 0 <= pad_row + below < px_h:
+                    pixels[pad_row + below][x] = mix(pixels[pad_row + below][x], (60, 200, 220), glow)
             if pad_left <= x <= pad_right and 0 <= pad_row < px_h:
-                pixels[pad_row][x] = (214, 220, 232)
+                pixels[pad_row][x] = (224, 230, 240)
         stars = random.Random(19690720)
         field = []
         for n in range(cells * view_h // 30):
@@ -4038,30 +4539,70 @@ class Display:
         self._landscape = (key, result)
         return result
 
-    def cockpit(self, c: Canvas, flight: Flight, mission: Mission, remaining, slow) -> float:
+    def cockpit(self, c: Canvas, flight: Flight, mission: Mission, remaining, slow,
+                preview: int | None = None) -> float:
+        """The view and its instruments. `preview` (the first row under the
+        flight director's card) draws the mission's landing site instead, edge
+        to edge and down to the last row, with where the flight starts."""
         width, height = c.width, c.height
         unicode = self.host.unicode
         ground = flight.terrain
         altitude = max(0, flight.y - ground.height(flight.x) - 3)
-        view_y, view_h = 3, height - 10
-        # Fixed overview and landing scales prevent continuous landscape repainting.
-        span = 1000.0 if altitude > 100 else 400.0
-        left = max(0.0, min(1000 - span, flight.x - span / 2))
-        if self.camera is None:
-            self.camera = (span, left)
-        else:
-            old_span, old_left = self.camera
-            self.camera = (old_span + (span - old_span) * .2, old_left + (left - old_left) * .2)
-        span, left = self.camera
-        # Quantize the camera to the raster so tiny numerical changes don't shimmer.
-        span = round(span / 10) * 10
-        metres = span / width
+        view_y = HEAD_ROWS
+        view_h = height - HEAD_ROWS - (0 if preview is not None else PANEL_ROWS)
         # Quadrant cells hold two pixels across, each half a cell wide.
         across = self.across
-        step = metres / across
-        left = round(left / step) * step
-        bottom = max(-20.0, flight.y - view_h * 2 * metres * .65)
-        bottom = round(bottom / metres) * metres
+        if preview is not None:
+            # The whole site from its lowest ground up; the flight's own camera starts afresh.
+            span, left, self.camera = 1000.0, 0.0, None
+            metres = span / width
+            step = metres / across
+            bottom = -20.0
+        else:
+            # Fixed scales prevent continuous landscape repainting: the whole
+            # corridor, the approach, and close in over the pad, where the
+            # craft is drawn nearer its true size against the pad. Each is left
+            # a little later than it is entered, so a hover never flickers between two.
+            zoom = self._zoom
+            if self.camera is None or flight.steps == 0:
+                zoom = 1000.0 if altitude > 100 else 400.0 if altitude > 30 else 200.0
+            elif zoom == 1000.0:
+                zoom = 400.0 if altitude <= 100 else zoom
+            elif zoom == 400.0:
+                zoom = 1000.0 if altitude > 120 else 200.0 if altitude <= 30 else zoom
+            else:
+                zoom = 400.0 if altitude > 42 else zoom
+            span = self._zoom = zoom
+            centre = flight.x
+            if zoom == 200.0:
+                # Close in, the window holds still on the pad, a steady picture to land
+                # on (and little to repaint), and follows only a craft that strays
+                # past the middle seven tenths of it.
+                middle = (ground.pad.left + ground.pad.right) / 2
+                stray = flight.x - middle
+                centre = middle + math.copysign(max(0.0, abs(stray) - span * .35), stray)
+            left = max(0.0, min(1000 - span, centre - span / 2))
+            if self.camera is None:
+                self.camera = (span, left)
+            else:
+                old_span, old_left = self.camera
+                # The close scale arrives in half the frames: every frame of a change
+                # of scale is a whole screen to send, and the last seconds are no time for it.
+                ease = .4 if zoom == 200.0 or old_span < 390 else .2
+                self.camera = (old_span + (span - old_span) * ease, old_left + (left - old_left) * ease)
+            span, left = self.camera
+            # Quantize the camera to the raster so tiny numerical changes don't shimmer.
+            span = round(span / 10) * 10
+            metres = span / width
+            step = metres / across
+            left = round(left / step) * step
+            tall = view_h * 2 * metres
+            if zoom == 200.0:
+                # And holds its height: the pad a fifth of the way up, unless the craft climbs out of it.
+                bottom = max(-20.0, ground.pad.height - tall * .2, flight.y - tall * .85)
+            else:
+                bottom = max(-20.0, flight.y - tall * .65)
+            bottom = round(bottom / metres) * metres
         top = bottom + view_h * 2 * metres
         px_w, px_h = width * across, view_h * 2
 
@@ -4072,7 +4613,7 @@ class Display:
         background, ground_row, sky_rows, (pad_left, pad_right, pad_row), field = self.landscape(
             ground, left, metres, top, width, view_h, width >= 120 and height >= 40, across)
         pixels = [list(row) for row in background]
-        lamp = (130, 250, 255) if self.frame % 10 < 6 else (40, 110, 130)
+        lamp = (130, 250, 255) if self.frame % 10 < 6 or preview is not None else (40, 110, 130)
         for x in (pad_left, pad_right):
             for py, color in ((pad_row - 1, (150, 156, 172)), (pad_row - 2, lamp)):
                 if 0 <= x < px_w and 0 <= py < px_h:
@@ -4083,8 +4624,35 @@ class Display:
         feet_row = row_of(flight.y - 3) - 1
         size = "medium" if width >= 120 and height >= 40 else "small"
         sy = max(6, min(px_h - 5, feet_row - LANDERS[size][1]))
+        power = flight.throttle if (flight.fuel > 0 and not flight.overheated and flight.status == "flying"
+                                    and preview is None) else 0
+        half = (4 if size == "small" else 6) * across
+        if flight.status != "crashed" and altitude < 90 and preview is None:
+            # The craft's shadow on the ground under it, darker and sharper as it comes
+            # down: the oldest height cue there is. And the plume's light, close in.
+            near = 1 - altitude / 90
+            for dx in range(-half, half + 1):
+                x = sx + dx
+                if not 0 <= x < px_w:
+                    continue
+                edge = 1 - abs(dx) / (half + 1)
+                for below in (0, 1):
+                    py = ground_row[x] + below
+                    if 0 <= py < px_h:
+                        color = scale(pixels[py][x], 1 - (.5 if below == 0 else .28) * near * min(1.0, edge * 2))
+                        if power > 0 and altitude < 30:
+                            color = mix(color, (255, 176, 84), .5 * power * (1 - altitude / 30) * edge)
+                        pixels[py][x] = color
+        if flight.status == "flying" and altitude < 40 and preview is None:
+            # Where the feet really are: the craft is drawn larger than life,
+            # and a landing needs both of these on the pad.
+            for foot_x, _ in flight.feet():
+                x = int((foot_x - left) / step)
+                if 0 <= x < px_w and 0 <= ground_row[x] < px_h:
+                    pixels[ground_row[x]][x] = (255, 255, 255)
         sprites = []
-        ghost = self.deck.ghost.flight if self.deck.ghost is not None and self.deck.kind != "replay" else None
+        ghost = self.deck.ghost.flight if (self.deck.ghost is not None and self.deck.kind != "replay"
+                                           and preview is None) else None
         if ghost is not None:
             # The ghost: the same craft in one dim colour, no plume, under the pilot's.
             gx = round((ghost.x - left) / step - (across - 1) / 2)
@@ -4100,7 +4668,6 @@ class Display:
             sprites.append((explosion(1.6, 4, 9, across), sx,
                             min(px_h - 1, row_of(ground.height(flight.x)) - 1)))
         else:
-            power = flight.throttle if flight.fuel > 0 and not flight.overheated and flight.status == "flying" else 0
             craft = lander_sprite(flight.angle, power, flight.elapsed, size, across, mission.craft)
             sprites.append(({(dx, dy): v for (dx, dy), v in craft.items()
                              if not 0 <= sx + dx < px_w or sy + dy < ground_row[sx + dx]}, sx, sy))
@@ -4119,29 +4686,34 @@ class Display:
         draw_stars(c, field, self.frame, unicode,
                    lambda x, row: all(pixels[2 * row + r][x * across + k] == sky_rows[row]
                                       for r in (0, 1) for k in range(across)), view_y)
+        last = view_y + view_h - 1
         pad_label_row = view_y + (pad_row + 2) // 2
-        if view_y <= pad_label_row < view_y + view_h:
-            c.text(max(0, (pad_left + pad_right) // (2 * across) - 1), pad_label_row, "PAD", 6, None)
+        pad_middle = (pad_left + pad_right) // (2 * across)
+        if view_y <= pad_label_row <= last:
+            c.text(max(0, pad_middle - 1), pad_label_row, "PAD", 6, None)
+        if preview is None and not mission.key.endswith(IFR) and (pad_right < 0 or pad_left >= px_w):
+            # The pad is out of the window: which way, and how far.
+            away = abs((ground.pad.left + ground.pad.right) / 2 - flight.x)
+            row = max(view_y + 4, min(last - 1, pad_label_row - 1))
+            if pad_right < 0:
+                c.rich(1, row, [("◄ " if unicode else "< ", 6), ("PAD ", 6), (f"{away:.0f} m", 7)], None)
+            else:
+                text = f"{away:.0f} m"
+                c.rich(width - len(text) - 7, row, [("PAD ", 6), (text, 7), (" ►" if unicode else " >", 6)], None)
         for site in flight.sites:
             # Other smooth sites: unlit, but any of them will do.
             middle = round(((site.left + site.right) / 2 - left) / (metres / across))
-            if 0 <= middle < px_w and view_y <= pad_label_row < view_y + view_h:
+            if 0 <= middle < px_w and view_y <= pad_label_row <= last:
                 c.text(max(0, middle // across - 2), pad_label_row, "SITE", 9, None)
         if mission.marker is not None:
             mx = round((mission.marker[0] - left) / (metres / across))
             marker_row = view_y + (row_of(ground.height(mission.marker[0])) - 2) // 2
-            if 0 <= mx < px_w and view_y <= marker_row < view_y + view_h:
+            if 0 <= mx < px_w and view_y <= marker_row <= last:
                 c.text(max(0, mx // across - len(mission.marker[1]) // 2), marker_row, mission.marker[1], 12, None)
-        if mission.key.split("@", 1)[0] == "apollo11" and flight.status == "flying" \
-                and any(start <= flight.elapsed < start + 3 for start in (8, 21, 30)):
-            alarm = "PROGRAM ALARM 1202" if flight.elapsed < 21 or flight.elapsed >= 30 else "PROGRAM ALARM 1201"
-            if self.frame % 6 < 4:
-                c.text(max(0, (c.width - len(alarm) - 4) // 2), view_y + 3, f"  {alarm}  ", (16, 12, 22),
-                       (255, 186, 60))
         if flight.ascent:
             # A sample return's ascent line, across the sky above the pad.
             line_row = view_y + row_of(flight.terrain.pad.height + 3 + flight.ascent) // 2
-            if view_y <= line_row < view_y + view_h:
+            if view_y <= line_row <= last and (preview is None or line_row >= preview):
                 dashes = ("╌" if unicode else "-") * width
                 c.text(0, line_row, dashes, 9 if flight.touchdowns else 12, None)
                 label = " ASCENT LINE "
@@ -4149,14 +4721,92 @@ class Display:
         for n, ahead in enumerate(flight.pads, 2):
             # A hop's pads to come: named by their order, not yet lit.
             middle = round(((ahead.left + ahead.right) / 2 - left) / (metres / across))
-            if 0 <= middle < px_w and view_y <= pad_label_row < view_y + view_h:
+            if 0 <= middle < px_w and view_y <= pad_label_row <= last:
                 c.text(max(0, middle // across - 2), pad_label_row, f"PAD {n}", 9, None)
+        if preview is not None:
+            # Where the flight starts, under the card: the craft itself is behind it on a short screen.
+            column = max(1, min(width - 8, sx // across))
+            craft_row = view_y + (sy + LANDERS[size][1]) // 2
+            start = [(" START ", 9), (f"{mission.altitude:.0f} m", 6)]
+            if craft_row < preview + 1 <= last:
+                c.rich(column, preview + 1, [("▼" if unicode else "v", 5), *start], None)
+            elif craft_row <= last:
+                # In view below the card: named where it hangs.
+                c.rich(min(width - 14, sx // across + half // across + 1), craft_row - 1, start, None)
+            self.masthead(c, flight, mission, remaining, slow, menu=True)
+            return span
+        if mission.key.split("@", 1)[0] == "apollo11" and flight.status == "flying" \
+                and any(start <= flight.elapsed < start + 3 for start in (8, 21, 30)):
+            alarm = "PROGRAM ALARM 1202" if flight.elapsed < 21 or flight.elapsed >= 30 else "PROGRAM ALARM 1201"
+            if self.frame % 6 < 4:
+                c.text(max(0, (c.width - len(alarm) - 4) // 2), view_y + 4, f"  {alarm}  ", (16, 12, 22),
+                       (255, 186, 60))
         if mission.key.endswith(IFR):
             self.instrument_panel(c, flight, altitude, view_y, view_h)
-        alarm = self.fuel_warning(c, flight, view_y + 1)
-        self.radio(c, flight, altitude, view_y + 2)
-        self.instruments(c, flight, mission, altitude, span, remaining, slow, alarm)
+        else:
+            # The window's own notes, on the sky: what a hundred metres is at
+            # this zoom, and whose ghost flies alongside.
+            bar = max(3, round(100 / metres))
+            start, end, dash = ("├", "┤", "─") if unicode else ("|", "|", "-")
+            notes = [(start + dash * (bar - 2) + end, (86, 104, 150)), (" 100 m", 9)]
+            if self.deck.kind == "replay":
+                notes += [("   WATCHING ", 9), (self.deck.ghost.label, 7)]
+            elif self.deck.ghost is not None:
+                notes += [("   GHOST ", 9), (self.deck.ghost.label, GHOST_COLOR)]
+            if self.assisted(mission):
+                notes += [("   PATH ", 9), ("training aid", (70, 150, 160))]
+                self.flight_path(c, flight, left, step, row_of, view_y, last)
+            c.rich(1, view_y, notes, None, width - 2)
+        book = self.deck.logbook
+        if (book is not None and flight.status == "flying" and flight.throttle == 0 and flight.elapsed < 12
+                and not flight.touchdowns and self.deck.kind != "replay"
+                and not any(book.counters.get(name) for name in ("landings", "crashes", "aborts", "sim_flights"))):
+            # A pilot's very first flight starts falling with the engine off: say which key lights it.
+            cue = f"  Engine off: [W] or [{self.arrows[1][0]}] throttles up, [9] is full thrust  "
+            c.annotated(max(0, (width - len(cue)) // 2), view_y + 5, cue, (18, 24, 44))
+        alarm = self.fuel_warning(c, flight, view_y + 2)
+        self.radio(c, flight, altitude, view_y + 3)
+        self.masthead(c, flight, mission, remaining, slow)
+        self.gauges(c, flight, altitude, alarm)
         return span
+
+    def assisted(self, mission: Mission) -> bool:
+        """Whether this flight shows its path ahead: the training basin, and a
+        Cadet program's simulator. Nothing that is scored does."""
+        program = self.deck.program
+        return (self.deck.kind == "" and not mission.difficulty) or \
+            (self.deck.kind == "sim" and program is not None and program.preset == "cadet")
+
+    def flight_path(self, c: Canvas, flight: Flight, left: float, step: float, row_of, view_y: int, last: int):
+        """The training aid: where the craft goes if the controls stay as they
+        are, as a dotted line, and where and how fast it comes down."""
+        if flight.status != "flying" or flight.resting:
+            return
+        points, lands = forecast(flight)
+        unicode, across = self.host.unicode, self.across
+        tint = (120, 206, 214)
+
+        def cell(x, y):
+            return int((x - left) / step) // across, view_y + row_of(y - 3) // 2
+
+        here = cell(flight.x, flight.y)
+        for x, y, _, _ in points[5:-1:5]:  # every half second, clear of the craft itself
+            col, row = cell(x, y)
+            if abs(col - here[0]) <= 6 and abs(row - here[1]) <= 3:
+                continue
+            if 0 <= col < c.width and view_y < row <= last:
+                c.put(col, row, "·" if unicode else ".", tint, None)
+        if lands and points:
+            x, y, vx, vy = points[-1]
+            col, row = cell(x, y)
+            pad = flight.terrain.pad
+            if 0 <= col < c.width and view_y < row - 1 <= last:
+                on_pad = pad.left + 3 <= x <= pad.right - 3
+                safe = on_pad and vy >= -3 and abs(vx) <= 2
+                note = f" {vy:+.0f} m/s"
+                at = min(col, c.width - len(note) - 2)
+                c.rich(at, row - 1, [("×" if unicode else "x", 6 if on_pad else 8), (note + " ", 6 if safe else 8)],
+                       (18, 24, 44))
 
     def fuel_warning(self, c: Canvas, flight: Flight, row: int) -> bool:
         """A chip across the top of the view when fuel runs low, where the eye
@@ -4180,43 +4830,83 @@ class Display:
         return level >= 2 and lit
 
     def instrument_panel(self, c: Canvas, flight: Flight, altitude: float, top: int, rows: int):
-        """No window: a radar altimeter, the pad's bearing and a cross-pointer for
-        drift and sink, as the LM's crews had in the last metres of their dust."""
-        width, dark = c.width, (8, 10, 18)
-        c.fill(0, top, width, rows, dark)
-        middle = top + rows // 2
+        """No window: the radar altimeter in large figures, a cross-pointer for
+        drift and sink with the landing limits as a window on it, and the
+        pad's bearing, as the LM's crews had in the last metres of their dust."""
+        width, dark, line = c.width, (8, 10, 18), (60, 76, 112)
         unicode = self.host.unicode
-        c.text(max(0, (width - 19) // 2), top + 3, "INSTRUMENT APPROACH", 9, dark)
-        c.rich(4, middle - 3, [("RADAR ALT ", 9), (f"{altitude:7.1f} m", 6)], dark)
-        c.rich(4, middle - 2, [("SINK      ", 9), (f"{flight.vy:+7.1f} m/s", 8 if abs(flight.vy) > 3 else 6)], dark)
+        c.fill(0, top, width, rows, dark)
+        c.text(max(0, (width - 19) // 2), top, "INSTRUMENT APPROACH", 9, dark)
+        tl, tr, bl, br, h, v = ("╭", "╮", "╰", "╯", "─", "│") if unicode else ("+", "+", "+", "+", "-", "|")
+
+        def box(x, y, w, tall, title):
+            c.text(x, y, tl + h * (w - 2) + tr, line, dark)
+            for row in range(y + 1, y + tall - 1):
+                c.put(x, row, v, line, dark)
+                c.put(x + w - 1, row, v, line, dark)
+            c.text(x, y + tall - 1, bl + h * (w - 2) + br, line, dark)
+            c.text(x + 2, y, f" {title} ", 9, dark)
+
+        span = min(width - 2, 100)
+        x0, y0 = (width - span) // 2, top + max(4, (rows - 15) // 2)
+        wide = (span - 2) // 2
+        # The radar altimeter: figures two cells to a stroke, five rows tall.
+        box(x0, y0, wide, 11, "RADAR ALT (m)")
+        figures = f"{altitude:.1f}"
+        length = sum(4 if ch == "." else 8 for ch in figures) - 2
+        at = x0 + 1 + max(0, (wide - 2 - length) // 2)
+        tone = rgb(6) if altitude > 15 else rgb(5)
+        for ch in figures:
+            for gy, strokes in enumerate(_FIGURES[ch]):
+                for gx, mark in enumerate(strokes):
+                    if mark == "#" and at + gx * 2 + 1 < x0 + wide - 1:
+                        c.fill(at + gx * 2, y0 + 2 + gy, 2, 1, tone)
+            at += 4 if ch == "." else 8
+        fast, sliding = flight.vy < -3, abs(flight.vx) > 2
+        c.rich(x0 + 3, y0 + 8, [("SINK  ", 9), (f"{flight.vy:+6.1f} m/s", 8 if fast else 6),
+                                ("  FAST" if fast else "", 8)], dark, wide - 5)
+        c.rich(x0 + 3, y0 + 9, [("DRIFT ", 9), (f"{flight.vx:+6.1f} m/s", 8 if sliding else 6),
+                                ("  WIDE" if sliding else "", 8)], dark, wide - 5)
+        # The cross-pointer: drift across (6 m/s to an edge), sink down (a row
+        # to a metre a second, level two rows from the top); the window on it
+        # is where a landing is within its limits.
+        bx, bw = x0 + wide + 2, span - wide - 2
+        box(bx, y0, bw, 11, "DRIFT / SINK")
+        cx, level, reach = bx + bw // 2, y0 + 3, (bw - 4) // 2
+        safe = round(reach * 2 / 6)
+        for col in range(bx + 1, bx + bw - 1):
+            c.put(col, level, "─" if unicode else "-", TRACK, dark)
+        for row in range(y0 + 1, y0 + 10):
+            c.put(cx, row, "│" if unicode else "|", TRACK, dark)
+        c.put(cx, level, "┼" if unicode else "+", TRACK, dark)
+        window = (38, 96, 108)
+        for col in range(cx - safe, cx + safe + 1):
+            c.put(col, level + 3, "─" if unicode else "-", window, dark)
+        for row in range(level, level + 3):
+            c.put(cx - safe, row, "│" if unicode else "|", window, dark)
+            c.put(cx + safe, row, "│" if unicode else "|", window, dark)
+        c.put(cx - safe, level + 3, "└" if unicode else "+", window, dark)
+        c.put(cx + safe, level + 3, "┘" if unicode else "+", window, dark)
+        px = cx + max(-reach, min(reach, round(flight.vx / 6 * reach)))
+        py = level + max(-2, min(6, round(-flight.vy)))
+        inside = abs(flight.vx) <= 2 and -3 <= flight.vy
+        c.put(px, py, "●" if unicode else "o", 6 if inside else 8, dark)
         # The pad's bearing: a strip 500 m wide, centred on the craft.
         pad = flight.terrain.pad
-        strip = max(20, min(61, width - 30)) // 2 * 2 + 1
+        box(x0, y0 + 11, span, 4, "PAD BEARING")
+        strip = (span - 6) // 2 * 2 + 1
         metres = 500 / strip
-        cells = ["-"] * strip
+        track, plate, craft = ("─", "═", "▲") if unicode else ("-", "=", "^")
         for n in range(strip):
             x = flight.x + (n - strip // 2) * metres
-            if pad.left <= x <= pad.right:
-                cells[n] = "="
-        cells[strip // 2] = "^"
-        c.text(4, middle + 1, "PAD", 9, dark)
-        c.text(8, middle + 1, "".join(cells), 6, dark)
+            on = pad.left <= x <= pad.right
+            c.put(x0 + 3 + n, y0 + 12, plate if on else track, 6 if on else TRACK, dark)
+        c.put(x0 + 3 + strip // 2, y0 + 12, craft, 5, dark)
         offset = (pad.left + pad.right) / 2 - flight.x
-        c.text(8, middle + 2, f"{abs(offset):.0f} m {'right' if offset > 0 else 'left'}" if abs(offset) >= 1
-               else "over the pad", 9, dark)
-        # The cross-pointer: drift across, sink down; the box's edge is the landing limit.
-        box_x, box_y = width - 18, middle - 3
-        if box_x > strip + 10:
-            for row in range(7):
-                c.text(box_x, box_y + row, "|" + " " * 13 + "|", 9, dark)
-            c.text(box_x, box_y - 1, "+" + "-" * 13 + "+", 9, dark)
-            c.text(box_x, box_y + 7, "+" + "-" * 13 + "+", 9, dark)
-            c.text(box_x + 7, box_y + 3, "+", 9, dark)
-            px = box_x + 7 + max(-6, min(6, round(flight.vx / 2 * 6)))
-            py = box_y + 3 + max(-3, min(3, round(-flight.vy / 3 * 3)))
-            inside = abs(flight.vx) <= 2 and abs(flight.vy) <= 3
-            c.text(px, py, "●" if unicode else "o", 6 if inside else 8, dark)
-            c.text(box_x + 1, box_y + 8, "DRIFT / SINK", 9, dark)
+        over = pad.left + 3 <= flight.x <= pad.right - 3
+        text = "over the pad" if over and abs(offset) < 1 else f"{abs(offset):.0f} m {'right' if offset > 0 else 'left'}"
+        c.rich(x0 + 3, y0 + 13, [(text, 6 if over else 7), ("   pad ", 9), (f"{pad.right - pad.left:.0f} m", 9),
+                                 (" wide", 9)], dark, span - 6)
 
     def radio(self, c: Canvas, flight: Flight, altitude: float, row: int):
         """A radio call under the fuel chip: the fuel counting down as each alert
@@ -4245,84 +4935,113 @@ class Display:
             text = f'"{state[1]}"'
             c.text(max(0, (c.width - len(text) - 2) // 2), row, f" {text} ", (200, 222, 255), (18, 24, 44))
 
-    def instruments(self, c: Canvas, flight: Flight, mission: Mission, altitude: float, span: float,
-                    remaining, slow, alarm: bool = False):
+    def masthead(self, c: Canvas, flight: Flight, mission: Mission, remaining, slow, menu: bool = False):
+        """The header row. In flight: what is being flown and for how long, and
+        the keys that leave it. Over the flight director: the title and the pilot."""
+        width = c.width
+        c.fill(0, 0, width, HEAD_ROWS)
+        mark = "L U N A R   L A N D E R" if width >= 100 else "LUNAR LANDER"
+        if menu:
+            c.rich(2, 0, _gradient(mark, (255, 240, 200), (232, 160, 58)), PANEL)
+            pilot = [("PILOT ", 9), (plain(self.host.handle, 24), 7), ("  ", 9),
+                     (career(self.deck.bests, self.catalog).rank, 5)]
+            c.rich(max(len(mark) + 4, width - 2 - sum(_cells(t) for t, _ in pilot)), 0, pilot, PANEL)
+            return
+        if remaining is not None and remaining < 60:
+            label = [(f"SESSION ENDS IN {max(0, remaining):.0f}s", 8)]
+        elif slow:
+            label = [("SLOW LINK: SIMULATION PACED", 8)]
+        else:
+            kind = {"sim": [("SIMULATOR ", 12)], "real": [("LIVE ", 8)],
+                    "replay": [("REPLAY ", 12)]}.get(self.deck.kind, [("FLIGHT ", 9)])
+            label = kind + [(plain(mission.name, 24), 5)]
+        clock = [("  T+", 9), (f"{flight.elapsed:5.1f}s", 6)]
+        left = 2
+        if width >= 100:
+            c.rich(2, 0, _gradient(mark, (255, 240, 200), (232, 160, 58)), PANEL)
+            left += len(mark) + 3
+        used = sum(_cells(t) for t, _ in label + clock)
+        # The keys that leave the flight, as long a form as the row has room for.
+        room = width - left - used - 3
+        for keys in ("[P] Pause  [?] Flight manual  " + self.back, "[P] Pause  [?] Manual  " + self.back,
+                     "[P] Pause  [?] Help  " + self.back, "[P] [?]  " + self.back,
+                     "[P] Pause  [?] Help  [Q] Leave", "[P] [?] [Q]"):
+            if len(keys) <= room:
+                c.annotated(width - 1 - len(keys), 0, keys, PANEL)
+                break
+        c.rich(left, 0, label + clock, PANEL, max(0, width - left - 1))
+
+    def gauges(self, c: Canvas, flight: Flight, altitude: float, alarm: bool = False):
+        """The instruments: six gauges on one strip, each with its label set in
+        the rule, its reading and a bar, then the flight keys. Speed, drift and
+        tilt carry their touchdown limits, and say so in a word, never by color alone."""
         width, height = c.width, c.height
         unicode = self.host.unicode
-        # The rules framing the view flash red with a critical fuel alert.
+        row = height - PANEL_ROWS
+        c.fill(0, row, width, PANEL_ROWS)
+        # The rule flashes red with a critical fuel alert.
         rule = rgb(8) if alarm else (52, 66, 98)
-        heavy, light = ("━", "─") if unicode else ("=", "-")
-        # Header: the wordmark and the flight, on a panel strip.
-        c.fill(0, 0, width, 2)
-        c.text(0, 2, ("─" if unicode else "-") * width, rule, PANEL)
-        c.rich(2, 0, _gradient("L U N A R   L A N D E R", (255, 240, 200), (232, 160, 58)), PANEL)
-        kind = {"sim": [("SIMULATOR ", 12)], "real": [("LIVE ", 8)],
-                "replay": [("REPLAY ", 12)]}.get(self.deck.kind, [("FLIGHT ", 9)])
-        flight_label = kind + [(plain(mission.name, 24), 5)]
-        c.rich(width - 2 - sum(_cells(t) for t, _ in flight_label), 0, flight_label, PANEL)
-        if self.deck.kind == "replay":
-            pilot = [("WATCHING ", 9), (self.deck.ghost.label, 7)]
-        else:
-            pilot = [("PILOT ", 9), (self.host.handle, 7), ("  ", 9), (career(self.deck.bests, self.catalog).rank, 5)]
-            if self.deck.ghost is not None:
-                pilot += [("  GHOST ", 9), (self.deck.ghost.label, GHOST_COLOR)]
-        c.rich(2, 1, pilot, PANEL, width // 2 + 10)
-        view = [("VIEW ", 9), (f"{span:4.0f} m", 6), ("   T+", 9), (f"{flight.elapsed:5.1f}s", 6)]
-        c.rich(width - 2 - sum(_cells(t) for t, _ in view), 1, view, PANEL)
-        # Instruments: four gauges, the throttle, the touchdown limits and the keys.
-        row = height - 7
-        c.fill(0, row, width, 7)
         c.text(0, row, ("─" if unicode else "-") * width, rule, PANEL)
-        column = (width - 4) // 4
-        bar = column - 4
+        # Segments, like a panel's lamps: lit, unlit, a needle and a limit's tick.
+        lit, unlit, cap, tick = ("■", "■", "█", "┃") if unicode else ("=", "-", "#", "|")
+        most, degree = ("≤", "°") if unicode else ("<=", " deg")
+        # Too fast is sinking too fast: a climb breaks no limit.
+        fast, sliding, steep, low = flight.vy < -3, abs(flight.vx) > 2, abs(flight.angle) > 10, fuel_alert(flight) > 0
+        columns = 6
+        each = (width - 1) // columns
 
-        def gauge(x, fraction, color, limit=None):
-            filled = round(max(0.0, min(1.0, fraction)) * bar)
-            for n in range(bar):
-                mark = heavy if n < filled else light
-                tint = color if n < filled else (40, 52, 82)
-                if limit is not None and n == round(limit * bar):
-                    mark, tint = ("┃" if unicode else "|"), ((240, 240, 240) if n < filled else (120, 132, 160))
-                c.put(x + n, row + 3, mark, tint, PANEL)
+        def fill(x, length, fraction, color, limit=None, ramp=None):
+            filled = round(max(0.0, min(1.0, fraction)) * length)
+            for n in range(length):
+                on = n < filled
+                tint = (ramp(n / max(1, length - 1)) if ramp else color) if on else TRACK
+                mark = lit if on else unlit
+                if limit is not None and n == round(limit * length):
+                    mark, tint = tick, ((240, 240, 240) if on else (120, 132, 160))
+                c.put(x + n, row + 2, mark, tint, PANEL)
 
-        fast, sliding, low = abs(flight.vy) > 3, abs(flight.vx) > 2, fuel_alert(flight) > 0
-        gauges = (("ALTITUDE", [(f"{altitude:7.1f} m", 7)], min(1.0, altitude / 300), (96, 140, 190), None),
-                  ("VERTICAL", [(f"{flight.vy:+7.1f} m/s", 8 if fast else 6)] + ([(" FAST", 8)] if fast else []),
-                   abs(flight.vy) / 6, rgb(8) if fast else rgb(6), .5),
-                  ("DRIFT", [(f"{flight.vx:+6.1f} m/s", 8 if sliding else 6)] + ([(" WIDE", 8)] if sliding else []),
-                   abs(flight.vx) / 4, rgb(8) if sliding else rgb(6), .5),
-                  ("HEAT", [(f"{thruster_heat(flight) * 100:5.0f} %", 8 if low else 5)]
-                   + ([(" CUT OUT" if flight.overheated else " HOT" if fuel_alert(flight) == 2 else " WARM", 8)]
-                      if low else []),
-                   thruster_heat(flight), mix(rgb(5), rgb(8), thruster_heat(flight)), None) if flight.cooling else
-                  ("FUEL", [(f"{flight.fuel:5.1f} kg", 8 if low else 5)]
-                   + ([(" EMPTY" if flight.fuel <= 0 else " LOW", 8)] if low else []),
-                   flight.fuel / max(1, flight.initial_fuel),
-                   mix(rgb(8), rgb(5), flight.fuel / max(1, flight.initial_fuel) * 2), None))
-        for n, (title, value, fraction, color, limit) in enumerate(gauges):
-            x = 2 + n * column
-            c.text(x, row + 1, title, 9, PANEL)
-            c.rich(x, row + 2, value, PANEL)
-            gauge(x, fraction, color, limit)
-        throttle = [("THRUST ", 9)]
-        for n in range(10):
-            on = n < round(flight.throttle * 10)
-            throttle.append((heavy if on else light, mix((255, 110, 40), (255, 244, 210), n / 9) if on else (40, 52, 82)))
-        throttle += [(f" {flight.throttle:4.0%}", 5), ("   TILT ", 9), (f"{flight.angle:+3.0f} deg", 12)]
-        c.rich(2, row + 4, throttle, PANEL)
-        message = None
-        if remaining is not None and remaining < 60:
-            message = f"SESSION ENDS IN {max(0, remaining):.0f}s"
-        elif slow:
-            message = "SLOW LINK: SIMULATION PACED"
-        status_x = 2 + 2 * column + 2
-        if message is None:
-            c.rich(status_x, row + 4, [("LAND  V<=", 9), ("3", 6), ("  H<=", 9), ("2", 5), ("  T<=", 9), ("10", 12)], PANEL)
-        else:
-            c.text(status_x, row + 4, message, 8, PANEL)
-        c.annotated(2, row + 5, f"[A/D {self.arrows[0]}] Tilt  [W/S {self.arrows[1]}] Thrust  [0-9] Power  "
-                    "[SPACE] Cut  [X] Level", PANEL)
-        c.annotated(2, row + 6, "[P] Pause  [?] Flight manual  " + self.back, PANEL)
+        def needle(x, length, position, safe, color):
+            # A marker either side of centre, over the band where a landing is safe.
+            middle = length // 2
+            band = round(safe * middle)
+            for n in range(length):
+                safe_here = abs(n - middle) <= band
+                c.put(x + n, row + 2, lit if safe_here else unlit, (38, 96, 108) if safe_here else TRACK, PANEL)
+            c.put(x + middle + round(max(-1.0, min(1.0, position)) * middle), row + 2, cap, color, PANEL)
+
+        heat_level = thruster_heat(flight)
+        share = flight.fuel / max(1, flight.initial_fuel)
+        gauges = (
+            ([("ALTITUDE", 9)], [(f"{altitude:.1f} m", 7)],
+             lambda x, n: fill(x, n, math.sqrt(min(1.0, altitude / 300)), (96, 140, 190))),
+            ([("VERTICAL ", 9), (most + "3", 6)],
+             [(f"{flight.vy:+.1f}", 8 if fast else 6), (" FAST" if fast else " m/s", 8 if fast else 9)],
+             lambda x, n: fill(x, n, abs(flight.vy) / 6, rgb(8) if fast else rgb(6) if flight.vy <= 0 else rgb(7), .5)),
+            ([("DRIFT ", 9), (most + "2", 6)],
+             [(f"{flight.vx:+.1f}", 8 if sliding else 6), (" WIDE" if sliding else " m/s", 8 if sliding else 9)],
+             lambda x, n: needle(x, n, flight.vx / 4, .5, rgb(8) if sliding else rgb(6))),
+            ([("TILT ", 9), (most + "10" + degree.strip(), 12)],
+             [(f"{flight.angle:+.0f}{degree}", 8 if steep else 12)] + ([(" STEEP", 8)] if steep else []),
+             lambda x, n: needle(x, n, flight.angle / 60, 1 / 6, rgb(8) if steep else rgb(12))),
+            ([("THRUST", 9)], [(f"{flight.throttle:.0%}", 5)],
+             lambda x, n: fill(x, n, flight.throttle, None,
+                               ramp=lambda t: mix((255, 110, 40), (255, 244, 210), t))),
+            (([("HEAT", 9)],
+              [(f"{heat_level * 100:.0f}%", 8 if low else 5)]
+              + ([(" CUT OUT" if flight.overheated else " HOT" if fuel_alert(flight) == 2 else " WARM", 8)] if low else []),
+              lambda x, n: fill(x, n, heat_level, mix(rgb(5), rgb(8), heat_level))) if flight.cooling else
+             ([("FUEL", 9)],
+              [(f"{flight.fuel:.1f} kg", 8 if low else 5)] + ([(" EMPTY" if flight.fuel <= 0 else " LOW", 8)] if low else []),
+              lambda x, n: fill(x, n, share, mix(rgb(8), rgb(5), share * 2)))),
+        )
+        for n, (title, value, bar) in enumerate(gauges):
+            x = 1 + n * each
+            c.rich(x, row, [(" ", 9), *title, (" ", 9)], PANEL, each)
+            c.rich(x + 1, row + 1, value, PANEL, each - 1)
+            # An odd length, so a needle has a true centre.
+            bar(x + 1, each - 2 if each % 2 else each - 3)
+        c.annotated(2, row + 3, f"[A/D {self.arrows[0]}] Tilt  [W/S {self.arrows[1]}] Thrust  [0-9] Power  "
+                    "[SPACE] Cut  [X] Level", PANEL, width - 3)
 
 
 @lru_cache(maxsize=2)
