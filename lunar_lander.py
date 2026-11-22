@@ -6033,7 +6033,7 @@ def run(host: Host, started: float) -> int:
             sig = getattr(signal, name)
             previous[sig] = signal.signal(sig, handler)
     keys = Keys()
-    deadline = None if host.limit is None else started + max(0, host.limit - 0.25)
+    deadline = None if host.limit is None else started + max(0, host.limit - DEADLINE_MARGIN)
     display = Display(host)
     records = None
     if host.ranked:
@@ -6148,8 +6148,24 @@ def run(host: Host, started: float) -> int:
     return 0
 
 
+# The door leaves this long before the host's limit, by itself and with the
+# terminal restored, rather than be cut off.
+DEADLINE_MARGIN = 1.0
+
+
+def launched(now: float | None = None, spent: float | None = None) -> float:
+    """When the host launched this process, on the monotonic clock. The host's
+    session limit runs from the launch, but the first line here runs only
+    after the interpreter has started and compiled this file, a quarter of a
+    second on a slow host. That start-up is work, so the processor time spent
+    so far says how long it took: never an overestimate, since a process
+    cannot have used more processor time than has passed."""
+    now = time.monotonic() if now is None else now
+    return now - (time.process_time() if spent is None else spent)
+
+
 def main() -> int:
-    started = time.monotonic()
+    started = launched()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=VERSION)
     parser.add_argument("drop_file", nargs="?", help="a classic BBS's DOOR32.SYS or DOOR.SYS")
