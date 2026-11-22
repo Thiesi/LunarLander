@@ -1,10 +1,10 @@
 # Release acceptance
 
-Target: `v0.7.3`. It is not a claim that every NetBBS transport or target
+Target: `v0.8.0`. It is not a claim that every NetBBS transport or target
 operating system has been certified; the checks still to be done in the field
 are listed at the end. Earlier releases' evidence follows, newest first.
 
-## Unreleased: the presentation overhaul
+## v0.8.0: the presentation overhaul
 
 - The cockpit is one header row, the view and four rows of instruments: 19
   rows of view at 80x24, where there were 14. Six gauges (altitude, vertical
@@ -56,8 +56,9 @@ are listed at the end. Earlier releases' evidence follows, newest first.
   the eight plain backgrounds, never 90-97 or 100-107. SyncTERM's CTerm
   reference lists 1 and 22 and says the bright codes have no effect unless a
   mode is on (read from its published documentation, not tried on a host).
-- 293 tests (unittest), run locally on Windows with Python 3.14. Saved data
-  and settings are unchanged from v0.6.0 (schema 3).
+- 293 tests (unittest). Hosted CI with the real NetBBS 7.40.0 runtime on
+  Linux and Windows passed on the release commit. Saved data is unchanged
+  from v0.6.0 (schema 3); no new settings.
 - Reviewed from renderer captures (`docs/images`), which mix a shade block's
   two colors as a fine dot pattern does. Not seen in a live terminal: see the
   field checks below.

@@ -30,7 +30,7 @@ import unicodedata
 import zlib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.7.3"
+VERSION = "0.8.0"
 DT = 1 / 60
 GRAVITY = 1.62
 DRY_MASS = 900.0
