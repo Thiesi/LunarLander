@@ -98,8 +98,10 @@ itself.
   FAST, WIDE or STEEP past them. The view shows the craft's shadow as it comes
   down, a bar for what a hundred metres is at the current zoom, and which way
   the pad lies when it is out of the window. Below 30 m it closes in to a
-  200 m window, and two marks on the ground show where the feet really are:
-  the craft is drawn larger than life, and a landing needs both on the pad.
+  200 m window, and two marks on the ground show where the feet really are,
+  white over the pad and red over anything else: the craft is drawn larger
+  than life, and a landing needs both on the pad. On the approach and close
+  in the window holds still on the pad.
 - **Training aids:** the training basin and a Cadet program's simulator show
   the flight path ahead (where the craft goes if the controls stay as they
   are, and how fast it would come down); nothing that is scored does. A
@@ -276,8 +278,8 @@ python scripts/capture.py --output .task/flight.png   # a frame as ANSI and PNG 
 
 A change to a screen comes with captures: the tests can prove that a screen
 fits, never that it looks right. `scripts/capture.py` takes `--width`,
-`--height`, `--color`, `--ascii`, `--pixels`, `--altitude` and `--mode` (menu,
-help, debrief, a scene, or `--gif` for an animation). With `--color 256` or
+`--height`, `--color`, `--ascii`, `--pixels`, `--mission`, `--altitude` and
+`--mode` (menu, help, debrief, a scene, or `--gif` for an animation). With `--color 256` or
 `--color 16` the picture is drawn from the palette codes the terminal is sent,
 its shade blocks as the eye mixes them. The game's design is in
 [docs/design.md](docs/design.md), and the acceptance evidence and remaining

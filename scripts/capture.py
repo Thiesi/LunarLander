@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--scene-time", type=float, default=1)
     parser.add_argument("--angle", type=float, default=0)
     parser.add_argument("--altitude", type=float, help="Metres above the pad, instead of the start")
+    parser.add_argument("--mission", help="A mission's key (tranquility, ...) instead of the training basin")
     parser.add_argument("--gif", action="store_true", help="Export a complete scene at 10 fps")
     parser.add_argument("--color", choices=("16", "256", "truecolor"), default="truecolor")
     parser.add_argument("--ascii", action="store_true")
@@ -89,19 +90,32 @@ def main():
     args = parser.parse_args()
     display = ll.Display(ll.Host(args.width, args.height, args.color, not args.ascii, pixels=args.pixels))
     display.tagline = ll.TAGLINES[0]  # captures stay reproducible
-    flight = ll.training()
+    mission = next((m for m in ll.missions() if m.key == args.mission), None) if args.mission else ll.missions()[0]
+    if mission is None:
+        parser.error("no mission with that key: " + ", ".join(m.key for m in ll.missions()))
+    flight = mission.launch()
     flight.throttle = .7
     flight.angle = args.angle
     if args.altitude is not None:
-        flight.y, flight.vy = flight.terrain.pad.height + 3 + args.altitude, -2.4
+        # Coming down over the pad, a little to one side and nearly settled.
+        pad = flight.terrain.pad
+        flight.x, flight.vx = (pad.left + pad.right) / 2 - 12, 1.2
+        flight.y, flight.vy = pad.height + 3 + args.altitude, -2.4
+        flight.elapsed = 21.4
     if args.mode in ("crash", "debrief"):
         flight.status = "crashed"
         flight.reason = "Hard impact: reduce vertical speed to 3 m/s or less."
-    canvas = display.draw(flight, args.mode, scene_age=args.scene_time)
+    def draw(age):
+        return display.draw(flight, args.mode, mission=mission, scene_age=age)
+
+    if args.mode == "flying":
+        for _ in range(40):  # let the camera settle on its scale
+            draw(0)
+    canvas = draw(args.scene_time)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.with_suffix(".ans").write_bytes(display.encode(canvas).encode("utf-8"))
     if args.gif:
-        frames = [render_canvas(display.draw(flight, args.mode, scene_age=n / 10), display)
+        frames = [render_canvas(draw(n / 10), display)
                   # The splash's last second and a half is its hold under the prompt.
                   for n in range(int(ll.SCENE_SECONDS.get(args.mode, 3) * 10) + (15 if args.mode == "splash" else 0))]
         frames[0].save(args.output, save_all=True, append_images=frames[1:], duration=100, loop=0)

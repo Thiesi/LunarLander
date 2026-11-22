@@ -241,11 +241,18 @@ scenery is shaded, never a card or text, and ASCII glyph mode stays flat.
 
 The craft is drawn larger than life: nine cells across at any zoom, on feet six
 metres apart. Close in (a third scale, 200 m, below 30 m) two marks on the
-ground show the feet at their true place, so "both feet on the pad" can be
-judged by eye. A craft is redrawn for each tilt rather than rotated as a
-picture: solid parts are mapped whole, legs are drawn again as lines between
-their turned ends, and windows, hatch and thrusters are always kept, each on a
-cell of its own. The drawing for a tilt is made once and kept. A flight path
+ground show the feet at their true place, white over the pad and red off it,
+so "both feet on the pad" can be judged by eye. Below the overview the window
+holds still on the pad and follows only a craft that strays past its middle
+seven tenths: a window that follows the craft is a whole screen to send for
+every pixel it moves, and a still one is a steadier thing to fly into. A craft
+is redrawn for each tilt rather than rotated as a picture: solid parts are
+mapped whole, whatever touched upright is joined again where turning drew it
+apart (which is all a leg is), and windows, hatch and thrusters are always
+kept, each on a cell of its own. The LM at its flight size has hand-drawn
+frames for 10, 20 and 30 degrees. The drawing for a tilt is made once and
+kept. In ASCII glyphs a sprite is laid in color like the scenery and lettered
+over it, a solid thing and not a few characters afloat. A flight path
 ahead is a training aid only (the training basin and a Cadet program's
 simulator): scored flights are judged from the same view every pilot has had.
 A classic BBS's sixteen colors use only what every ANSI terminal takes: the

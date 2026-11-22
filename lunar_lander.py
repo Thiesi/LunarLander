@@ -2349,13 +2349,16 @@ def stamp(pixels: list[list[tuple]], sprite: dict, x: int, y: int):
 
 
 def overlay(canvas: Canvas, sprite: dict, x: int, y: int, top: int = 0, left: int = 0):
-    """ASCII glyphs for a sprite at pixel (x, y): a cell shows its upper pixel's glyph."""
+    """ASCII glyphs for a sprite at pixel (x, y), over the shape `stamp` has
+    already laid in color: a cell shows its upper pixel's glyph, drawn in a
+    deeper tone of its own color, so the craft is a solid thing with its
+    detail lettered on it and not a few characters afloat on the scenery."""
     cells: dict[tuple[int, int], tuple] = {}
     for (dx, dy), value in sorted(sprite.items(), key=lambda item: -((y + item[0][1]) % 2)):
         cells[(x + dx, (y + dy) // 2)] = value
     for (col, row), (color, glyph) in cells.items():
-        if 0 <= col and 0 <= row:
-            canvas.put(left + col, top + row, glyph, color, None)
+        if 0 <= col and 0 <= row and glyph.strip():
+            canvas.put(left + col, top + row, glyph, scale(color, .5), None)
 
 
 # The lander, drawn a pixel per character: docking hatch, silver ascent stage
@@ -2463,7 +2466,7 @@ LANDERS_FINE = {"small": (_sprite(_LANDER_SMALL_FINE, 8, 5), 3, 3, 4),
 # centre, foot row and plume start); quadrant art is each pixel twice across.
 _CRAFT_ART = {
     "surveyor": {"small": ("....h....",
-                           "DDD.A.DDD",
+                           "DDDAAADDD",
                            "....A....",
                            "...sSs...",
                            "..sSSSs..",
@@ -2472,14 +2475,14 @@ _CRAFT_ART = {
                            ".L.....L.",
                            "L.......L"),
                  "medium": ("......h......",
-                            "DDDD..A..DDDD",
+                            "DDDDAAAAADDDD",
                             "......A......",
                             "......A......",
                             ".....sSs.....",
                             "....sSSSs....",
                             "....sSSSs....",
                             ".....gGg.....",
-                            "...L..n..L...",
+                            "...LL.n.LL...",
                             "..L.......L..",
                             "PL.........LP")},
     "altair": {"small": ("...sSs...",
@@ -2705,13 +2708,14 @@ class Ghost:
                 and abs(self.flight.y - self.end[2]) < .01)
 
 
-def flag_sprite(across: int = 1) -> dict:
-    """A mission flag on its pole, planted beside the craft: base at (0, 0), upward."""
+def flag_sprite(across: int = 1, flown: int = 1) -> dict:
+    """A mission flag on its pole, planted beside the craft: base at (0, 0),
+    upward, the cloth to the right, or to the left with `flown` -1."""
     pole, cloth, stripe = (176, 180, 190), (236, 238, 244), (232, 160, 58)
     sprite = {(0, -dy): (pole, "|") for dy in range(10)}
     for dy in range(6, 10):
         for dx in range(1, 1 + 7 * across):
-            sprite[(dx, -dy)] = (stripe if dy == 7 else cloth, "=" if dy == 7 else "#")
+            sprite[(dx * flown, -dy)] = (stripe if dy == 7 else cloth, "=" if dy == 7 else "#")
     return sprite
 
 
@@ -2819,38 +2823,118 @@ def turned(roles: dict, angle: float, across: int = 1) -> dict:
                 out[(tx, ty)] = role
     # Each kept pixel lands on a cell of its own: where two would share one,
     # the later takes the free cell nearest to where it belongs.
-    pinned = set()
+    spots = {}
     for (x, y), role in roles.items():
         if role in _KEPT:
             fx, fy = exact(x, y)
             tx, ty = near(fx), round(fy)
             spot = min(((tx + dx, ty + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
-                        if (tx + dx, ty + dy) not in pinned),
+                        if (tx + dx, ty + dy) not in spots.values()),
                        key=lambda cell: ((cell[0] - fx) / across) ** 2 + (cell[1] - fy) ** 2, default=(tx, ty))
-            pinned.add(spot)
+            spots[(x, y)] = spot
             out[spot] = role
+    # What touched upright still touches: every pixel is where it belongs, and
+    # each pair of neighbours is joined by a line where turning drew them
+    # apart. That is all a leg is, and it keeps a mast under its hatch and a
+    # boom on its mast, which a single pixel would otherwise fall between.
     for (x, y), role in roles.items():
-        if role not in _THIN:
-            continue
-        x0, y0 = place(x, y)
+        x0, y0 = spots.get((x, y)) or place(x, y)
         out.setdefault((x0, y0), role)
-        for dx, dy in ((1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1)):
+        for dx, dy in ((1, -1), (1, 0), (1, 1), (0, 1)):  # each pair once
             other = roles.get((x + dx, y + dy))
-            # A line to each neighbour: once for a pair of leg pixels, and to
-            # the hull a leg hangs from, so it never comes away from it.
-            if other is None or (other in _THIN and (dx, dy) not in ((1, -1), (1, 0), (1, 1), (0, 1))):
+            if other is None:
                 continue
-            x1, y1 = place(x + dx, y + dy)
+            x1, y1 = spots.get((x + dx, y + dy)) or place(x + dx, y + dy)
             steps = max(abs(x1 - x0), abs(y1 - y0))
             for n in range(1, steps):
+                # The lower of the two gives the line its role (a leg's foot, not the hull above it).
                 out.setdefault((near(x0 + (x1 - x0) * n / steps), round(y0 + (y1 - y0) * n / steps)),
-                               other if other in _THIN and (y + dy, x + dx) > (y, x) else role)
+                               other if (y + dy, x + dx) > (y, x) else role)
     return out
+
+
+# The LM at its flight size, leaning right by 10, 20 and 30 degrees, drawn by
+# hand: the tilts a landing is flown at, on the craft most pilots fly, at the
+# size an 80-column terminal shows. The cabin keeps its row of windows, the
+# band and the foil step down as one, and each leg is a leg. A lean to the
+# left is the same frame mirrored. Every other craft, size and tilt is drawn
+# by `turned`. Each: its rows, and the column and row of the craft's centre.
+_TILTED = {
+    ("lm", "small", 1, 10): ((".....h...",
+                              "....sss..",
+                              "...swWws.",
+                              ".ksssss..",
+                              ".Gkkkkk..",
+                              ".GgGgGgk.",
+                              ".LGGGGGG.",
+                              "L..nNn.G.",
+                              ".......L.",
+                              "........L"), 4, 5),
+    ("lm", "small", 1, 20): ((".......h.",
+                              ".....sss.",
+                              "....swWws",
+                              "..kksssss",
+                              "..Ggkkkss",
+                              "..GGGgGkk",
+                              ".L.nGGGgG",
+                              "L...Nn.GG",
+                              ".......L.",
+                              "........L"), 5, 5),
+    ("lm", "small", 1, 30): ((".......h.",
+                              "......ss.",
+                              "....swWss",
+                              "...kkssws",
+                              "..GgGkkss",
+                              ".LGGGgGkk",
+                              "L..nGGGgG",
+                              "....NnGG.",
+                              ".......L.",
+                              ".......L.",
+                              ".......L."), 5, 5),
+    ("lm", "small", 2, 10): (("...........hh.....",
+                              "........ssssss....",
+                              "......swwWssWwws..",
+                              "...kkssssssssss...",
+                              "...Gkkkkkkkkkkkk..",
+                              "...gGgGGgGGgGGgGk.",
+                              "..LLGGGGGGGGGGGGG.",
+                              "LL....nNNNNn....g.",
+                              "...............LL.",
+                              "................LL"), 9, 5),
+    ("lm", "small", 2, 20): (("..............hh..",
+                              "..........ssssss..",
+                              "........swwWssWwws",
+                              "....kkkkssssssssss",
+                              "....GGgGkkkkkkssss",
+                              "....gGGGGGgGGgkkkk",
+                              "..LL..nnGGGGGGgGGG",
+                              "LL.....NNNNn..GGGg",
+                              "..............LL..",
+                              "................LL"), 10, 5),
+    ("lm", "small", 2, 30): (("..............hh..",
+                              "............ssss..",
+                              "........swwWssssss",
+                              "......kkkkssssWwws",
+                              "....GGgGGGkkkkssss",
+                              "..LLgGGGGGGgGGkkkk",
+                              "LL....nnGGGGGGgGGG",
+                              "........NNNnGGGG..",
+                              "..............LL..",
+                              "..............LL..",
+                              "..............LL.."), 10, 5),
+}
 
 
 @lru_cache(maxsize=512)
 def _hull(craft: str, size: str, across: int, angle: float) -> dict:
-    """A craft's hull and legs at one tilt: drawn once for each step it can be tilted to."""
+    """A craft's hull and legs at one tilt: drawn once for each step it can be
+    tilted to, by hand where there is a frame for it and by rule otherwise."""
+    frame = _TILTED.get((craft, size, across, abs(angle)))
+    if frame is not None:
+        rows, ox, oy = frame
+        hull = _sprite(rows, ox, oy)
+        # A lean to the left mirrors about the craft's axis: column 0, or between 0 and 1.
+        return hull if angle > 0 else {(across - 1 - x, y): role for (x, y), role in hull.items()}
     roles = (LANDERS_FINE if across == 2 else LANDERS)[size][0]
     roles = CRAFT_SPRITES.get((craft, size, across), roles)
     return turned(roles, angle, across) if angle else dict(roles)
@@ -3239,6 +3323,16 @@ def stage(width: int, rows: int, across: int = 1) -> Stage:
         return max(round(mid_at(u)) + 2, round(pad_y + bump * (1 - near_pad)))
 
     surface = [ground_at(u) for u in at]
+
+    def lie(u):
+        """The plain's height before it is set on the pixel grid: for its slope."""
+        bump = 1.3 * math.sin(u * .21) + .9 * math.sin(u * .067 + 1)
+        return pad_y + bump * (1 - max(0.0, 1 - max(0, abs(u - _centre(pad_c, across)) - pad_half / across - 1) / 6))
+
+    # Lit from the left, as the flight's ground is: -2 (in shade) to 2 (facing the sun).
+    lean = [max(-2, min(2, round((lie(u + 3) - lie(u - 3)) / 6 / -.09))) for u in at]
+    rims = ((110, 118, 136), (132, 140, 158), (168, 176, 190), (198, 204, 216), (222, 226, 234))
+    relief = (.74, .87, 1.0, 1.09, 1.18)
     bands = [(126, 130, 148), (104, 108, 126), (84, 88, 106), (66, 70, 88), (50, 53, 70)]
     pixels = []
     for y in range(h):
@@ -3249,12 +3343,13 @@ def stage(width: int, rows: int, across: int = 1) -> Stage:
                 depth = (y - surface[x]) / max(1, h - surface[x])
                 band = min(4, int(depth ** .8 * 5))
                 if y == surface[x]:
-                    slope = surface[min(w - 1, x + 1)] - surface[max(0, x - 1)]
-                    color = (204, 208, 218) if slope < 0 else (170, 176, 190) if slope == 0 else (122, 128, 144)
+                    color = rims[lean[x] + 2]
                 else:
                     grain = _hash(x, y, 3)
                     band = max(0, band - 1) if grain < .035 else min(4, band + 1) if grain > .965 else band
                     color = bands[band]
+                    if lean[x] and y - surface[x] < 5:
+                        color = scale(color, relief[lean[x] + 2] if y - surface[x] < 3 else (1 + relief[lean[x] + 2]) / 2)
             elif y >= mid[x]:
                 color = range_color(y - mid[x], mid_light[x], True)
             elif y >= far[x]:
@@ -3413,6 +3508,8 @@ CARD_ROWS = 18  # the full card's height; a compact one is 15
 # The cockpit: a header row, the view, and the instruments' four rows (their
 # labels on a rule, the readings, the gauges and the flight keys).
 HEAD_ROWS, PANEL_ROWS = 1, 4
+# A foot's mark on the ground: over the pad, and over anything else.
+FOOT_ON, FOOT_OFF = (255, 255, 255), (255, 84, 64)
 # A gauge's unlit track: a slate that sixteen colors show as dark grey, not black.
 TRACK = (50, 56, 76)
 
@@ -3773,7 +3870,7 @@ class Display:
             beacon_on = True
             ground = pad_y - 1 - feet
             sprites.append((lander_sprite(0, 0, 0, "large", across), pad_c, ground))
-            sprites.append((flag_sprite(across), min(w - 8 * across, pad_r + 4 * across), pad_y - 1))
+            sprites.append((flag_sprite(across, -1), max(8 * across, pad_l - 3 * across), pad_y - 1))
             award = self.deck.award
             spaced = "  ".join("GREETINGS FROM")
             texts.append((1, max(1, (cols - len(spaced)) // 2), _gradient(spaced, (255, 244, 214), (232, 160, 58))))
@@ -3781,9 +3878,10 @@ class Display:
             texts.append((3, max(1, (cols - len(place)) // 2), [(place, (255, 240, 200))]))
             caption = plain(f"{self.host.handle}  /  {date.today().isoformat()}  /  "
                             f"{award.score:,} pts  /  {award.medal}" if award else self.host.handle, cols - 4)
-            texts.append((rows - 4, max(1, (cols - len(caption)) // 2), [(caption, MEDAL_COLORS["GOLD"][1])]))
+            # A row lower than the scenes' captions: the pad and its light stay in the picture.
+            texts.append((rows - 3, max(1, (cols - len(caption)) // 2), [(caption, MEDAL_COLORS["GOLD"][1])]))
             hint = "[SPACE] Back to the debrief   " + self.back
-            texts.append((rows - 2, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
+            texts.append((rows - 1, max(1, (cols - len(hint)) // 2), "annotated:" + hint))
         else:
             title = {"launch": "GO FOR DESCENT", "landing": "CONTACT LIGHT", "crash": "SIGNAL LOST"}[kind]
             subtitle = {"launch": "Attitude control online / descent engine armed",
@@ -3849,9 +3947,8 @@ class Display:
             if 0 <= x < w:
                 pixels[pad_y - 1][x] = (150, 156, 172)
                 pixels[pad_y - 2][x] = (130, 250, 255) if beacon_on else (36, 86, 104)
-        if unicode:
-            for sprite, x, y in sprites:
-                stamp(pixels, sprite, x, y)
+        for sprite, x, y in sprites:
+            stamp(pixels, sprite, x, y)
         blit(c, pixels, top, left, unicode, across)
         if not unicode:
             for sprite, x, y in sprites:
@@ -4025,10 +4122,14 @@ class Display:
             view = self.deck.program or ProgramView()
             lines = [f"NEW PROGRAM / SEASON {view.season}", "",
                      f"{view.count} missions, from a broad sea to the frontier.", "Choose how hard:", "",
-                     "[1] CADET       any number of simulator runs; a crash loses",
-                     "                that mission and the program goes on",
-                     "[2] ASTRONAUT   one simulator run per mission; a crash ends it",
-                     "[3] TEST PILOT  no simulator at all; a crash ends it", ""]
+                     # Each named in the color of what it risks.
+                     [("[", 9), ("1", 5), ("] ", 9), ("CADET       ", 6),
+                      ("any number of simulator runs; a crash loses", 7)],
+                     [("                that mission and the program goes on", 7)],
+                     [("[", 9), ("2", 5), ("] ", 9), ("ASTRONAUT   ", 5),
+                      ("one simulator run per mission; a crash ends it", 7)],
+                     [("[", 9), ("3", 5), ("] ", 9), ("TEST PILOT  ", 8),
+                      ("no simulator at all; a crash ends it", 7)], ""]
             if view.status == "active":
                 lines.append("Starting one ends the program you are flying.")
             lines += ["[ESC] Back"]
@@ -4046,7 +4147,9 @@ class Display:
                      "Crash and you fly that mission again; the clock counts", "flight time only. Leaving ends the tour.", ""]
             if tour and tour["status"] == "active":
                 lines += [f"Under way: {tour['landed']} of {count} landed, {tour['score']:,} pts,",
-                          f"{clock_text(tour['seconds'])} flying, {tour['retries']} retries", "",
+                          f"{clock_text(tour['seconds'])} flying, {tour['retries']} retries",
+                          # A lamp for each mission, lit as it is landed.
+                          self.segments(count, tour["landed"], MEDAL_COLORS["GOLD"][1]), "",
                           f"[ENTER] Continue: {tour['next']}"]
             else:
                 if tour and tour["status"] == "complete":
@@ -4056,10 +4159,14 @@ class Display:
         elif mode == "tour-board":
             lines = ["GRAND TOUR BOARD", ""]
             board = (self.deck.tour or {}).get("board", ())
+            if board:
+                lines.append([(f"    {'PILOT':22}  {'POINTS':>7}  {'FLYING':>7}  RETRIES", 9)])
             for i, (name, score, seconds, retries, user) in enumerate(board, 1):
                 if self.host.ranked and user == self.host.user:
                     mine = len(lines)
-                lines.append(f"{i:2}. {plain(name, 22):22} {score:7,} pts  {clock_text(seconds):>6}  {retries} retries")
+                lines.append([(f"{i:2}. ", 9), (f"{plain(name, 22):22}  ", 7), (f"{score:7,}", 6),
+                              (f"  {clock_text(seconds):>7}", 6), (f"  {retries}", 6 if retries else 9),
+                              (" retries" if retries != 1 else " retry", 9)])
             if not board:
                 lines.append("No tours completed on this node yet.")
             lines += ["", "[B] or [ESC] Back"]
@@ -4067,21 +4174,32 @@ class Display:
             view = self.deck.program or ProgramView()
             preset = view.board_preset
             lines = [f"PROGRAM BOARD / {PRESET[preset][0]} / {view.season}", ""]
+            if view.board:
+                lines.append([(f"    {'PILOT':22}  {'MISSIONS':{view.count + 6}}  POINTS", 9)])
             for i, (name, landed, lost, score, user) in enumerate(view.board, 1):
                 if self.host.ranked and user == self.host.user:
                     mine = len(lines)
-                lines.append(f"{i:2}. {plain(name, 24):24} {landed}/{view.count} landed  {score:6} pts"
-                             + (f"  {lost} lost" if preset == "cadet" and lost else ""))
+                # A lamp a mission: landed, then lost, then not flown.
+                lamps = self.segments(view.count, landed + lost,
+                                      lambda n, landed=landed: rgb(6) if n < landed else rgb(8))
+                lines.append([(f"{i:2}. ", 9), (f"{plain(name, 22):22}  ", 7), *lamps,
+                              (f" {landed:2}/{view.count}  ", 6), (f"{score:6}", 6), (" pts", 9),
+                              (f"  {lost} lost" if preset == "cadet" and lost else "", 8)])
             if not view.board:
                 lines.append("No programs flown with this preset this season.")
             lines += ["", f"[{self.arrows[0]}] Preset    [B] or [ESC] Back"]
         elif mode == "scores":
             lines = ["BEST PILOTS / " + mission.name, ""]
+            floor = 1000 * max(1, mission.difficulty)
             for i, (name, score, user) in enumerate(standings or [], 1):
                 if self.host.ranked and user == self.host.user:
                     mine = len(lines)
                 earned = medal(mission, score)
-                lines.append([(f"{i:2}. ", 9), (f"{plain(name, 28):28} ", 7), (f"{score:6}", 6), (" pts  ", 9),
+                # Each score on the same track as the debrief's: a bare landing to a perfect one.
+                lamps = self.segments(10, max(1, round(max(0.0, min(1.0, (score - floor) / floor)) * 10)),
+                                      MEDAL_COLORS[earned][1] if earned else rgb(9))
+                lines.append([(f"{i:2}. ", 9), (f"{plain(name, 22):22} ", 7), (f"{score:6}", 6), (" pts  ", 9),
+                              *lamps, ("  ", 9),
                               *(medal_parts(earned, unicode) + [(" " + earned, MEDAL_COLORS[earned][1])]
                                 if earned else [])])
             if not standings:
@@ -4103,7 +4221,7 @@ class Display:
                 row = c.cells[y + mine]
                 for col in range(x + 1, x + box_width - 1):
                     char, fg, _ = row[col]
-                    row[col] = (char, (255, 240, 200) if char != " " else fg, HIGHLIGHT)
+                    row[col] = (char, fg if char in " ■┃=-|●" else (255, 240, 200), HIGHLIGHT)
         return c
 
     def segments(self, length: int, lit: int, color, ticks: dict | None = None) -> list:
@@ -4370,7 +4488,8 @@ class Display:
             c.text(tab_x, y0 + 1, f" {label} ", (255, 240, 200) if chosen else 9, HIGHLIGHT if chosen else PANEL)
             tab_x += len(label) + 3
         held = sum(1 for a in ACHIEVEMENTS if a.key in book.held)
-        tally = [(f"{held}/{len(ACHIEVEMENTS)}", 6), (" achievements", 9)]
+        tally = [*self.segments(12, round(held / len(ACHIEVEMENTS) * 12) or (1 if held else 0), MEDAL_COLORS["GOLD"][1]),
+                 (f" {held}/{len(ACHIEVEMENTS)}", 6), (" achievements", 9)]
         c.rich(x0 + box_w - 3 - sum(_cells(t) for t, _ in tally), y0 + 1, tally, PANEL)
         if not compact:
             c.text(x0 + 1, y0 + 2, ("─" if unicode else "-") * (box_w - 2), EDGE, PANEL)
@@ -4404,7 +4523,7 @@ class Display:
         lines += [[],
                   [("FLIGHTS ", 9), (f"{counts.get('landings', 0):.0f}", 6), (" landed  ", 9),
                    (f"{counts.get('crashes', 0):.0f}", 6), (" crashed  ", 9),
-                   (f"{counts.get('aborts', 0):.0f}", 6), (" abandoned", 9)],
+                   (f"{counts.get('aborts', 0):.0f}", 6), (" abandoned  ", 9), *self.flown(counts)],
                   [("IN THE AIR ", 9), (_duration(counts.get("flight_seconds", 0)), 6), ("   SIMULATOR ", 9),
                    (f"{counts.get('sim_flights', 0):.0f} flights, {_duration(counts.get('sim_seconds', 0))}", 6)],
                   [("SOFTEST ", 9), number("softest", "{:.2f}", " m/s"), ("  CLOSEST ", 9),
@@ -4415,6 +4534,15 @@ class Display:
         hidden = sum(1 for a in ACHIEVEMENTS if a.hidden and a.key not in book.held)
         lines.append([("ACHIEVEMENTS ", 9), *tiers, (f"{hidden} hidden to find" if hidden else "", 9)])
         return lines
+
+    def flown(self, counts: dict) -> list:
+        """A pilot's flights as sixteen lamps: landed, crashed and abandoned by their share."""
+        landed, crashed, left = (counts.get(name, 0) for name in ("landings", "crashes", "aborts"))
+        total = landed + crashed + left
+        if not total:
+            return []
+        good, bad = round(landed / total * 16), round((landed + crashed) / total * 16)
+        return self.segments(16, 16, lambda n: rgb(6) if n < good else rgb(8) if n < bad else rgb(9))
 
     def achievement_lines(self, book: Logbook, width: int) -> list:
         unicode = self.host.unicode
@@ -4574,10 +4702,11 @@ class Display:
                 zoom = 400.0 if altitude > 42 else zoom
             span = self._zoom = zoom
             centre = flight.x
-            if zoom == 200.0:
-                # Close in, the window holds still on the pad, a steady picture to land
-                # on (and little to repaint), and follows only a craft that strays
-                # past the middle seven tenths of it.
+            if zoom < 1000.0:
+                # On the approach and close in, the window holds still on the pad, a
+                # steady picture to fly into (and little to repaint: a window that
+                # follows the craft is a whole screen to send for every pixel it
+                # moves), and follows only a craft past the middle seven tenths of it.
                 middle = (ground.pad.left + ground.pad.right) / 2
                 stray = flight.x - middle
                 centre = middle + math.copysign(max(0.0, abs(stray) - span * .35), stray)
@@ -4586,10 +4715,10 @@ class Display:
                 self.camera = (span, left)
             else:
                 old_span, old_left = self.camera
-                # The close scale arrives in half the frames: every frame of a change
-                # of scale is a whole screen to send, and the last seconds are no time for it.
-                ease = .4 if zoom == 200.0 or old_span < 390 else .2
-                self.camera = (old_span + (span - old_span) * ease, old_left + (left - old_left) * ease)
+                # A change of scale is brisk, under a second: every frame of it is a
+                # whole screen to send. A pan at one scale is gentler.
+                ease = .4 if abs(span - old_span) > 5 else .2
+                self.camera = (old_span + (span - old_span) * .4, old_left + (left - old_left) * ease)
             span, left = self.camera
             # Quantize the camera to the raster so tiny numerical changes don't shimmer.
             span = round(span / 10) * 10
@@ -4597,7 +4726,7 @@ class Display:
             step = metres / across
             left = round(left / step) * step
             tall = view_h * 2 * metres
-            if zoom == 200.0:
+            if zoom < 1000.0:
                 # And holds its height: the pad a fifth of the way up, unless the craft climbs out of it.
                 bottom = max(-20.0, ground.pad.height - tall * .2, flight.y - tall * .85)
             else:
@@ -4627,6 +4756,7 @@ class Display:
         power = flight.throttle if (flight.fuel > 0 and not flight.overheated and flight.status == "flying"
                                     and preview is None) else 0
         half = (4 if size == "small" else 6) * across
+        feet: dict = {}
         if flight.status != "crashed" and altitude < 90 and preview is None:
             # The craft's shadow on the ground under it, darker and sharper as it comes
             # down: the oldest height cue there is. And the plume's light, close in.
@@ -4645,11 +4775,19 @@ class Display:
                         pixels[py][x] = color
         if flight.status == "flying" and altitude < 40 and preview is None:
             # Where the feet really are: the craft is drawn larger than life,
-            # and a landing needs both of these on the pad.
+            # and a landing needs both of these on the pad. White over the pad
+            # (or another smooth site), red over anything else. Each is one
+            # pixel, set into its cell after the scenery so that no neighbour's
+            # color is averaged into it: (cell, row) -> [pixels marked, any off].
+            grounds = (ground.pad, *flight.sites)
             for foot_x, _ in flight.feet():
                 x = int((foot_x - left) / step)
                 if 0 <= x < px_w and 0 <= ground_row[x] < px_h:
-                    pixels[ground_row[x]][x] = (255, 255, 255)
+                    over = any(site.left <= foot_x <= site.right for site in grounds)
+                    mark = feet.setdefault((x // across, ground_row[x] // 2), [0, False])
+                    mark[0] |= 1 << (x % across + 2 * (ground_row[x] % 2)) if across == 2 else \
+                        (12 if ground_row[x] % 2 else 3)
+                    mark[1] = mark[1] or not over
         sprites = []
         ghost = self.deck.ghost.flight if (self.deck.ghost is not None and self.deck.kind != "replay"
                                            and preview is None) else None
@@ -4676,13 +4814,17 @@ class Display:
                 strength = power * (1 - gap_m / 40)
                 sprites.append((dust(strength, flight.elapsed, 6 + round(8 * strength), across=across),
                                 sx, ground_row[sx] - 1))
-        if unicode:
-            for sprite, x, y in sprites:
-                stamp(pixels, sprite, x, y)
+        for sprite, x, y in sprites:
+            stamp(pixels, sprite, x, y)
         blit(c, pixels, view_y, 0, unicode, across)
         if not unicode:
             for sprite, x, y in sprites:
                 overlay(c, sprite, x, y, view_y)
+        for (col, row), (mask, off) in feet.items():
+            char, fg, bg = c.cells[view_y + row][col]
+            rest = bg if char == " " or isinstance(fg, int) else mix(fg, bg, .5)
+            glyph = QUADRANTS[mask] if unicode else "'" if mask == 3 else "."
+            c.cells[view_y + row][col] = (glyph, FOOT_OFF if off else FOOT_ON, rest)
         draw_stars(c, field, self.frame, unicode,
                    lambda x, row: all(pixels[2 * row + r][x * across + k] == sky_rows[row]
                                       for r in (0, 1) for k in range(across)), view_y)
