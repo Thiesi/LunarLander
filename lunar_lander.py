@@ -5039,7 +5039,7 @@ class Display:
             c.rich(x, row, [(" ", 9), *title, (" ", 9)], PANEL, each)
             c.rich(x + 1, row + 1, value, PANEL, each - 1)
             # An odd length, so a needle has a true centre.
-            bar(x + 1, (each - 2) // 2 * 2 - 1 if each % 2 else each - 2)
+            bar(x + 1, each - 2 if each % 2 else each - 3)
         c.annotated(2, row + 3, f"[A/D {self.arrows[0]}] Tilt  [W/S {self.arrows[1]}] Thrust  [0-9] Power  "
                     "[SPACE] Cut  [X] Level", PANEL, width - 3)
 

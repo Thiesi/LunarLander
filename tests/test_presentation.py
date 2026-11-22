@@ -144,6 +144,22 @@ class CockpitTests(unittest.TestCase):
         flight.vy = -6
         self.assertIn("FAST", text(self.bars(flight)[0], [24 - ll.PANEL_ROWS + 1]))
 
+    def test_a_gauge_is_an_odd_number_of_lamps_so_a_needle_has_a_centre(self):
+        for width in (80, 81, 100, 132, 133):
+            with self.subTest(width=width):
+                flight = ll.training()
+                flight.vx = flight.angle = 0
+                canvas, bars = self.bars(flight, width=width, height=30)
+                each = (canvas.width - 1) // 6
+                for gauge in range(6):
+                    lamps = [cell for cell in bars[1 + gauge * each:1 + (gauge + 1) * each] if cell[0] in "■█┃"]
+                    self.assertEqual(len(lamps), each - 2 if each % 2 else each - 3)
+                    self.assertEqual(len(lamps) % 2, 1)
+                # Level and still, the drift and tilt needles sit on the middle lamp.
+                for gauge in (2, 3):
+                    lamps = [cell[0] for cell in bars[1 + gauge * each:1 + (gauge + 1) * each] if cell[0] in "■█"]
+                    self.assertEqual(lamps.index("█"), len(lamps) // 2)
+
     def test_the_view_says_what_a_hundred_metres_is(self):
         display, flight = ll.Display(ll.Host()), ll.training()
         row = text(display.draw(flight), [ll.HEAD_ROWS])

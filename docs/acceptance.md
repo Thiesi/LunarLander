@@ -56,7 +56,7 @@ are listed at the end. Earlier releases' evidence follows, newest first.
   the eight plain backgrounds, never 90-97 or 100-107. SyncTERM's CTerm
   reference lists 1 and 22 and says the bright codes have no effect unless a
   mode is on (read from its published documentation, not tried on a host).
-- 292 tests (unittest), run locally on Windows with Python 3.14. Saved data
+- 293 tests (unittest), run locally on Windows with Python 3.14. Saved data
   and settings are unchanged from v0.6.0 (schema 3).
 - Reviewed from renderer captures (`docs/images`), which mix a shade block's
   two colors as a fine dot pattern does. Not seen in a live terminal: see the
