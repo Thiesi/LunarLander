@@ -151,6 +151,15 @@ class ProcessTests(unittest.TestCase):
                 self.assertIn(b"\x1b[?25h", output)
                 self.assertEqual(error, b"")
 
+    def test_the_session_is_counted_from_the_launch(self):
+        # The host's limit runs from when it launched the door, not from the door's first line.
+        self.assertEqual(ll.launched(100.0, .3), 99.7)
+        self.assertEqual(ll.launched(100.0, 0), 100.0)
+        now = time.monotonic()
+        self.assertLessEqual(ll.launched(), time.monotonic())
+        self.assertGreater(ll.launched(), now - time.process_time() - 1)
+        self.assertGreaterEqual(ll.DEADLINE_MARGIN, .5)
+
     def test_bad_host_metadata_reports_to_sysop(self):
         result = self.run_door({"door_api": 99}, b"")
         self.assertEqual(result.returncode, 1)

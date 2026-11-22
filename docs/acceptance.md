@@ -28,6 +28,15 @@ are listed at the end. Earlier releases' evidence follows, newest first.
   flag stands left of the craft, clear of the screen's edge, and its captions
   sit a row lower so the pad stays in the picture.
 - ASCII glyphs: a sprite is laid in color and lettered over it.
+- The session is counted from the host's launch: the door took its limit
+  from its own first line, which runs only after Python has started and
+  compiled the file, and left 0.25 s before it. On a slow host that start-up
+  is longer than the margin, and the host cut the door off instead: the
+  hosted Windows run of the deadline scenario failed once in six on this
+  larger file. The start-up is now taken off (by the processor time spent
+  before the first line), and the margin is 1 s. A 3 s session on the
+  development host, where a process is slow to start, ends itself after
+  2.1 to 2.9 s; it took 3.0 to 3.6 s, past its limit.
 - A round-trip test reads each display's bytes back through a small ANSI
   terminal and compares the screen with the one meant, frame after frame of
   a flight and across every screen, for truecolor, 256 colors, sixteen on
